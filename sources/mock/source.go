@@ -193,6 +193,14 @@ func (s *Source) QueueParseResult(sessionID string, update source.SourceUpdate, 
 	})
 }
 
+// QueueDiscoverError enqueues a Discover result that returns err.
+// Safe to call after construction (runtime mutation).
+func (s *Source) QueueDiscoverError(err error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.discoverQueue = append(s.discoverQueue, discoverResult{err: err})
+}
+
 // SetHandles sets permanent handles returned by Discover when the queue is
 // empty. Unlike WithHandles (which queues a one-shot result), SetHandles
 // persists across all subsequent Discover calls. Convenience method for tests.
