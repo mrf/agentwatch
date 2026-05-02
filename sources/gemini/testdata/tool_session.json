@@ -1,0 +1,36 @@
+{
+  "conversationHistory": [
+    {
+      "role": "user",
+      "parts": [{"text": "what files are in the project?"}]
+    },
+    {
+      "role": "model",
+      "parts": [
+        {"text": "Let me check the project files."},
+        {"functionCall": {"name": "list_directory", "args": {"path": "."}}}
+      ],
+      "usageMetadata": {
+        "promptTokenCount": 100,
+        "candidatesTokenCount": 30,
+        "totalTokenCount": 130
+      }
+    },
+    {
+      "role": "user",
+      "parts": [
+        {"functionResponse": {"name": "list_directory", "response": {"content": "main.go go.mod"}}}
+      ]
+    },
+    {
+      "role": "model",
+      "parts": [{"text": "The project has main.go and go.mod."}],
+      "usageMetadata": {
+        "promptTokenCount": 150,
+        "candidatesTokenCount": 20,
+        "totalTokenCount": 170
+      }
+    }
+  ],
+  "model": "gemini-2.0-flash-exp"
+}
