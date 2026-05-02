@@ -1,0 +1,7 @@
+{
+  "database": "dolt",
+  "backend": "dolt",
+  "dolt_mode": "server",
+  "dolt_database": "agentwatch",
+  "project_id": "88ae85a9-5982-4a5b-9445-c3de9dd09293"
+}
