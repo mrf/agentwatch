@@ -17,6 +17,7 @@ type config struct {
 	sink                EventSink
 	logger              *slog.Logger
 	clock               clock.Clock
+	staleThreshold      time.Duration
 	completionRetention time.Duration
 }
 
@@ -25,6 +26,7 @@ func defaultConfig() config {
 		pollInterval:        2 * time.Second,
 		clock:               clock.Wall(),
 		logger:              slog.Default(),
+		staleThreshold:      5 * time.Minute,
 		completionRetention: 30 * time.Second,
 	}
 }
@@ -61,6 +63,15 @@ func WithLogger(l *slog.Logger) Option {
 func WithClock(c clock.Clock) Option {
 	return func(cfg *config) {
 		cfg.clock = c
+	}
+}
+
+// WithStaleThreshold sets how long an active session can go without
+// new data before being transitioned to terminal with a "stale" event.
+// A zero value disables stale detection.
+func WithStaleThreshold(d time.Duration) Option {
+	return func(c *config) {
+		c.staleThreshold = d
 	}
 }
 
