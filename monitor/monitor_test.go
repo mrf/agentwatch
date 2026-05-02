@@ -891,3 +891,807 @@ func TestPollOnce_TerminalDefaultEndedAt(t *testing.T) {
 		t.Errorf("CompletedAt = %v, want %v (clock.Now fallback)", *snap[0].CompletedAt, clk.Now())
 	}
 }
+
+// --- Lifecycle transition table tests (§4.5) ---
+
+// TestTransition_ActiveToTerminal_Stale verifies that an active session with no
+// data past the stale threshold transitions to terminal with a "stale" event.
+func TestTransition_ActiveToTerminal_Stale(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// First poll: discover the session.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	staleThreshold := 30 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(staleThreshold),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 || snap[0].Lifecycle != session.LifecycleActive {
+		t.Fatalf("expected 1 active session, got %d with lifecycle %q", len(snap), snap[0].Lifecycle)
+	}
+
+	// Advance past stale threshold with no new data.
+	clk.Advance(staleThreshold + time.Second)
+	// No new update queued — Parse returns zero SourceUpdate.
+
+	sink.events = nil // reset events
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	snap = m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleTerminal {
+		t.Errorf("Lifecycle = %q, want %q", snap[0].Lifecycle, session.LifecycleTerminal)
+	}
+	if snap[0].CompletedAt == nil {
+		t.Fatal("CompletedAt should not be nil after stale transition")
+	}
+
+	// Verify stale lifecycle event was delivered.
+	var staleFound bool
+	for i := 0; i < len(sink.events); i++ {
+		ev := sink.events[i]
+		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
+			ev.Lifecycle.Type == session.EventStale {
+			staleFound = true
+			if ev.Lifecycle.From != session.LifecycleActive {
+				t.Errorf("stale From = %q, want %q", ev.Lifecycle.From, session.LifecycleActive)
+			}
+			if ev.Lifecycle.To != session.LifecycleTerminal {
+				t.Errorf("stale To = %q, want %q", ev.Lifecycle.To, session.LifecycleTerminal)
+			}
+			if ev.Lifecycle.SessionID != "s1" {
+				t.Errorf("stale SessionID = %q, want %q", ev.Lifecycle.SessionID, "s1")
+			}
+		}
+	}
+	if !staleFound {
+		t.Error("no stale lifecycle event delivered")
+	}
+}
+
+// TestTransition_ActiveNotStale_WithinThreshold verifies that an active session
+// within the stale threshold is not marked stale.
+func TestTransition_ActiveNotStale_WithinThreshold(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	staleThreshold := 30 * time.Second
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(staleThreshold),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Advance but stay within threshold.
+	clk.Advance(staleThreshold - time.Second)
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleActive {
+		t.Errorf("Lifecycle = %q, want %q (should still be active)", snap[0].Lifecycle, session.LifecycleActive)
+	}
+}
+
+// TestTransition_StaleDisabledWhenZero verifies that a zero stale threshold
+// disables stale detection.
+func TestTransition_StaleDisabledWhenZero(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(0), // disabled
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Advance way past any reasonable threshold.
+	clk.Advance(24 * time.Hour)
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleActive {
+		t.Errorf("Lifecycle = %q, want %q (stale disabled)", snap[0].Lifecycle, session.LifecycleActive)
+	}
+}
+
+// TestTransition_TerminalToRemoved verifies that a terminal session is removed
+// from the store after the retention window expires.
+func TestTransition_TerminalToRemoved(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Poll 1: discover.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	retention := 10 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithCompletionRetention(retention),
+		monitor.WithStaleThreshold(0), // disable stale so it doesn't interfere
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Poll 2: terminal.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "done",
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 || snap[0].Lifecycle != session.LifecycleTerminal {
+		t.Fatalf("expected 1 terminal session, got %d", len(snap))
+	}
+
+	// Advance past retention window.
+	clk.Advance(retention + time.Second)
+	sink.events = nil
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	// Session should be removed from store.
+	snap = m.Snapshot()
+	if len(snap) != 0 {
+		t.Errorf("expected 0 sessions after retention expires, got %d", len(snap))
+	}
+
+	// Verify removed lifecycle event was delivered.
+	var removedFound bool
+	for i := 0; i < len(sink.events); i++ {
+		ev := sink.events[i]
+		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
+			ev.Lifecycle.Type == session.EventRemoved {
+			removedFound = true
+			if ev.Lifecycle.From != session.LifecycleTerminal {
+				t.Errorf("removed From = %q, want %q", ev.Lifecycle.From, session.LifecycleTerminal)
+			}
+			if ev.Lifecycle.SessionID != "s1" {
+				t.Errorf("removed SessionID = %q, want %q", ev.Lifecycle.SessionID, "s1")
+			}
+		}
+	}
+	if !removedFound {
+		t.Error("no removed lifecycle event delivered")
+	}
+
+	// Verify delta event includes removed ID.
+	var deltaFound bool
+	for i := 0; i < len(sink.events); i++ {
+		ev := sink.events[i]
+		if ev.Type == monitor.EventDelta {
+			deltaFound = true
+			if len(ev.Removed) != 1 || ev.Removed[0] != "s1" {
+				t.Errorf("delta Removed = %v, want [s1]", ev.Removed)
+			}
+		}
+	}
+	if !deltaFound {
+		t.Error("no delta event with removed IDs delivered")
+	}
+}
+
+// TestTransition_TerminalNotRemovedBeforeRetention verifies that a terminal
+// session is retained within the retention window.
+func TestTransition_TerminalNotRemovedBeforeRetention(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	retention := 30 * time.Second
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithCompletionRetention(retention),
+		monitor.WithStaleThreshold(0),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Terminal transition.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	// Advance but stay within retention.
+	clk.Advance(retention - 2*time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session (still retained), got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleTerminal {
+		t.Errorf("Lifecycle = %q, want %q", snap[0].Lifecycle, session.LifecycleTerminal)
+	}
+}
+
+// TestTransition_RemovedToActive_Resumed verifies that a removed session
+// returning new data transitions to active with a "resumed" event.
+func TestTransition_RemovedToActive_Resumed(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Poll 1: discover.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	retention := 5 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithCompletionRetention(retention),
+		monitor.WithStaleThreshold(0),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Poll 2: terminal.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "done",
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	// Poll 3: advance past retention → removed.
+	clk.Advance(retention + time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 0 {
+		t.Fatalf("expected 0 sessions after removal, got %d", len(snap))
+	}
+
+	// Poll 4: new data for the same session ID → resumed from removed.
+	clk.Advance(time.Second)
+	sink.events = nil
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "opus-2",
+	}, "c3")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 4: %v", err)
+	}
+
+	snap = m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session after resume from removed, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleActive {
+		t.Errorf("Lifecycle = %q, want %q", snap[0].Lifecycle, session.LifecycleActive)
+	}
+	if snap[0].Model != "opus-2" {
+		t.Errorf("Model = %q, want %q", snap[0].Model, "opus-2")
+	}
+	if snap[0].CompletedAt != nil {
+		t.Error("CompletedAt should be nil after resume")
+	}
+
+	// Verify resumed lifecycle event.
+	var resumeFound bool
+	for i := 0; i < len(sink.events); i++ {
+		ev := sink.events[i]
+		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
+			ev.Lifecycle.Type == session.EventResumed {
+			resumeFound = true
+			if ev.Lifecycle.From != session.LifecycleTerminal {
+				t.Errorf("resume From = %q, want %q", ev.Lifecycle.From, session.LifecycleTerminal)
+			}
+			if ev.Lifecycle.To != session.LifecycleActive {
+				t.Errorf("resume To = %q, want %q", ev.Lifecycle.To, session.LifecycleActive)
+			}
+		}
+	}
+	if !resumeFound {
+		t.Error("no resumed lifecycle event delivered for removed → active")
+	}
+}
+
+// TestTransition_RemovedNoNewData verifies that a removed session with no
+// new data remains absent from the store and emits no events.
+func TestTransition_RemovedNoNewData(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Discover → terminal → removed.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	retention := 5 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithCompletionRetention(retention),
+		monitor.WithStaleThreshold(0),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	clk.Advance(retention + time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	// Now removed. Poll again with no new data.
+	sink.events = nil
+	clk.Advance(time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 4: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 0 {
+		t.Errorf("expected 0 sessions, got %d", len(snap))
+	}
+	if len(sink.events) != 0 {
+		t.Errorf("expected 0 events for removed+no-data, got %d", len(sink.events))
+	}
+}
+
+// TestTransition_StaleOnlyAffectsActiveSessions verifies that the stale sweep
+// does not affect terminal sessions.
+func TestTransition_StaleOnlyAffectsActiveSessions(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Discover and then immediately terminal.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	staleThreshold := 10 * time.Second
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(staleThreshold),
+		monitor.WithCompletionRetention(time.Hour), // long retention so it doesn't get removed
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Terminal.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	// Advance past stale threshold — should NOT trigger another stale event.
+	clk.Advance(staleThreshold + time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	// Should still be terminal, not double-terminalled.
+	if snap[0].Lifecycle != session.LifecycleTerminal {
+		t.Errorf("Lifecycle = %q, want %q", snap[0].Lifecycle, session.LifecycleTerminal)
+	}
+}
+
+// TestTransition_FullLifecycle exercises the complete path:
+// untracked → active → active → terminal → (retained) → removed → resumed.
+func TestTransition_FullLifecycle(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	retention := 10 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithCompletionRetention(retention),
+		monitor.WithStaleThreshold(0), // use explicit terminal, not stale
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+
+	// Step 1: discovered.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "opus",
+	}, "c1")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce discovered: %v", err)
+	}
+
+	// Step 2: updated.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID:     "s1",
+		Activity:      session.ActivityIdle,
+		ContextTokens: 500,
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce updated: %v", err)
+	}
+
+	// Step 3: terminal.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "user exit",
+	}, "c3")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce terminal: %v", err)
+	}
+
+	// Step 4: still retained.
+	clk.Advance(retention / 2)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce retained: %v", err)
+	}
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 retained session, got %d", len(snap))
+	}
+
+	// Step 5: removed.
+	clk.Advance(retention)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce removed: %v", err)
+	}
+	snap = m.Snapshot()
+	if len(snap) != 0 {
+		t.Fatalf("expected 0 sessions after removal, got %d", len(snap))
+	}
+
+	// Step 6: resumed from removed.
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "opus-2",
+	}, "c4")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce resumed: %v", err)
+	}
+	snap = m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session after resume, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleActive {
+		t.Errorf("final Lifecycle = %q, want %q", snap[0].Lifecycle, session.LifecycleActive)
+	}
+
+	// Collect all lifecycle event types in order.
+	var lcTypes []session.LifecycleEventType
+	for i := 0; i < len(sink.events); i++ {
+		if sink.events[i].Type == monitor.EventLifecycle && sink.events[i].Lifecycle != nil {
+			lcTypes = append(lcTypes, sink.events[i].Lifecycle.Type)
+		}
+	}
+
+	expected := []session.LifecycleEventType{
+		session.EventDiscovered,
+		session.EventUpdated,
+		session.EventTerminal,
+		session.EventRemoved,
+		session.EventResumed,
+	}
+
+	if len(lcTypes) != len(expected) {
+		t.Fatalf("lifecycle events = %v, want %v", lcTypes, expected)
+	}
+	for i := 0; i < len(expected); i++ {
+		if lcTypes[i] != expected[i] {
+			t.Errorf("lifecycle[%d] = %q, want %q", i, lcTypes[i], expected[i])
+		}
+	}
+}
+
+// TestTransition_StaleResetsOnNewData verifies that receiving data resets the
+// stale clock — a session that almost went stale but gets an update stays active.
+func TestTransition_StaleResetsOnNewData(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	staleThreshold := 30 * time.Second
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(staleThreshold),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Almost stale.
+	clk.Advance(staleThreshold - time.Second)
+
+	// New data arrives — resets LastDataReceivedAt.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityIdle,
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	// Advance again — now from the reset point, not the original.
+	clk.Advance(staleThreshold - time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleActive {
+		t.Errorf("Lifecycle = %q, want %q (data reset stale clock)", snap[0].Lifecycle, session.LifecycleActive)
+	}
+}
+
+// TestTransition_MultipleSessionsIndependentLifecycles verifies that lifecycle
+// transitions are tracked independently per session.
+func TestTransition_MultipleSessionsIndependentLifecycles(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+		{ID: "s2", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Both start active.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+	src.AddUpdate("s2", source.SourceUpdate{
+		SessionID: "s2",
+		Activity:  session.ActivityIdle,
+	}, "c1")
+
+	staleThreshold := 20 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(staleThreshold),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// s1 gets new data; s2 does not.
+	clk.Advance(10 * time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityIdle,
+	}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	// Advance past stale threshold for s2 but not s1.
+	clk.Advance(11 * time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	snap := m.Snapshot()
+	byID := make(map[string]session.SessionState)
+	for i := 0; i < len(snap); i++ {
+		byID[snap[i].ID] = snap[i]
+	}
+
+	if s1, ok := byID["s1"]; !ok {
+		t.Error("s1 missing from snapshot")
+	} else if s1.Lifecycle != session.LifecycleActive {
+		t.Errorf("s1 Lifecycle = %q, want %q", s1.Lifecycle, session.LifecycleActive)
+	}
+
+	if s2, ok := byID["s2"]; !ok {
+		t.Error("s2 missing from snapshot")
+	} else if s2.Lifecycle != session.LifecycleTerminal {
+		t.Errorf("s2 Lifecycle = %q, want %q (should be stale)", s2.Lifecycle, session.LifecycleTerminal)
+	}
+}

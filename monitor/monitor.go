@@ -19,7 +19,8 @@ type Monitor struct {
 
 	mu      sync.Mutex
 	store   map[string]session.SessionState
-	cursors map[string]source.Cursor // "source:sessionID" -> cursor
+	cursors map[string]source.Cursor  // "source:sessionID" -> cursor
+	removed map[string]struct{}       // session IDs removed by retention sweep
 
 	seq atomic.Uint64
 }
@@ -40,6 +41,7 @@ func New(opts ...Option) (*Monitor, error) {
 		cfg:     cfg,
 		store:   make(map[string]session.SessionState),
 		cursors: make(map[string]source.Cursor),
+		removed: make(map[string]struct{}),
 	}, nil
 }
 
@@ -116,16 +118,26 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				At:        now,
 			}
 
+			_, wasRemoved := m.removed[h.ID]
+
 			switch {
 			case !existed:
-				state = applyUpdate(session.SessionState{
+				base := session.SessionState{
 					ID:        h.ID,
 					Source:    h.Source,
 					Lifecycle: session.LifecycleActive,
 					StartedAt: h.StartedAt,
-				}, update, now)
-				lcEvent.Type = session.EventDiscovered
+				}
+				state = applyUpdate(base, update, now)
 				lcEvent.To = session.LifecycleActive
+
+				if wasRemoved {
+					delete(m.removed, h.ID)
+					lcEvent.Type = session.EventResumed
+					lcEvent.From = session.LifecycleTerminal
+				} else {
+					lcEvent.Type = session.EventDiscovered
+				}
 
 			case existing.Lifecycle == session.LifecycleTerminal:
 				state = applyUpdate(existing, update, now)
@@ -166,8 +178,73 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		}
 	}
 
+	// Sweep: detect stale active sessions.
+	if m.cfg.staleThreshold > 0 {
+		now := m.cfg.clock.Now()
+		threshold := now.Add(-m.cfg.staleThreshold)
+
+		m.mu.Lock()
+		for id, s := range m.store {
+			if s.Lifecycle != session.LifecycleActive {
+				continue
+			}
+			if !s.LastDataReceivedAt.IsZero() && s.LastDataReceivedAt.Before(threshold) {
+				s.Lifecycle = session.LifecycleTerminal
+				completedAt := now
+				s.CompletedAt = &completedAt
+				m.store[id] = s
+
+				cloned := s.Clone()
+				updates = append(updates, cloned)
+				lifecycles = append(lifecycles, session.LifecycleEvent{
+					Type:      session.EventStale,
+					SessionID: id,
+					Source:    s.Source,
+					From:      session.LifecycleActive,
+					To:        session.LifecycleTerminal,
+					At:        now,
+					Reason:    "no data received past stale threshold",
+				})
+			}
+		}
+		m.mu.Unlock()
+	}
+
+	// Sweep: remove terminal sessions past retention window.
+	var removedIDs []string
+	now := m.cfg.clock.Now()
+
+	m.mu.Lock()
+	for id, s := range m.store {
+		if s.Lifecycle != session.LifecycleTerminal {
+			continue
+		}
+		if s.CompletedAt == nil {
+			continue
+		}
+		if now.Sub(*s.CompletedAt) >= m.cfg.completionRetention {
+			removedIDs = append(removedIDs, id)
+		}
+	}
+	for i := 0; i < len(removedIDs); i++ {
+		id := removedIDs[i]
+		s := m.store[id]
+		delete(m.store, id)
+		m.removed[id] = struct{}{}
+
+		lifecycles = append(lifecycles, session.LifecycleEvent{
+			Type:      session.EventRemoved,
+			SessionID: id,
+			Source:    s.Source,
+			From:      session.LifecycleTerminal,
+			At:        now,
+			Reason:    "retention window expired",
+		})
+	}
+	m.mu.Unlock()
+
 	// Deliver events to sinks outside any lock.
-	if m.cfg.sink != nil && len(updates) > 0 {
+	if m.cfg.sink != nil && (len(updates) > 0 || len(removedIDs) > 0) {
 		for i := 0; i < len(lifecycles); i++ {
 			lc := lifecycles[i]
 			seq := m.seq.Add(1)
@@ -191,6 +268,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			At:      m.cfg.clock.Now(),
 			Type:    EventDelta,
 			Updates: updates,
+			Removed: removedIDs,
 		}
 		if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
 			m.cfg.logger.Warn("sink error",
