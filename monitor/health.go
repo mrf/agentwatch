@@ -2,21 +2,19 @@ package monitor
 
 import "time"
 
-// HealthStatus describes the operational status of a monitored source.
+// HealthStatus indicates the operational state of a source.
 type HealthStatus string
 
 const (
 	// HealthHealthy means the source is operating normally.
 	HealthHealthy HealthStatus = "healthy"
-	// HealthDegraded means the source is experiencing transient failures.
+	// HealthDegraded means the source is experiencing intermittent failures.
 	HealthDegraded HealthStatus = "degraded"
-	// HealthFailed means the source has exceeded its failure threshold.
+	// HealthFailed means the source has stopped providing data.
 	HealthFailed HealthStatus = "failed"
 )
 
-// Health holds the current health snapshot for a single source.
-// Error strings must be sanitized before leaving the process — no absolute
-// paths or panic details through transports.
+// Health reports the operational state of a single source.
 type Health struct {
 	Source           string       `json:"source"`
 	Status           HealthStatus `json:"status"`

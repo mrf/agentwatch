@@ -37,12 +37,13 @@ type parseResult struct {
 type Source struct {
 	name string
 
-	mu              sync.Mutex
-	discoverQueue   []discoverResult
-	discoverCalls   []DiscoverCall
-	parseQueues     map[string][]parseResult // keyed by session ID
-	parseCalls      []ParseCall
-	defaultParse    *parseResult // fallback when a session queue is exhausted
+	mu               sync.Mutex
+	discoverQueue    []discoverResult
+	permanentHandles []source.SessionHandle // returned when queue is empty
+	discoverCalls    []DiscoverCall
+	parseQueues      map[string][]parseResult // keyed by session ID
+	parseCalls       []ParseCall
+	defaultParse     *parseResult // fallback when a session queue is exhausted
 }
 
 // Option configures a Source.
@@ -108,7 +109,8 @@ func (s *Source) Name() string {
 }
 
 // Discover implements source.Source. It dequeues and returns the next scripted
-// result. When the queue is exhausted it returns nil, nil.
+// result. When the queue is exhausted it returns permanentHandles (set via
+// SetHandles), or nil if none are configured.
 func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -116,6 +118,11 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	s.discoverCalls = append(s.discoverCalls, DiscoverCall{})
 
 	if len(s.discoverQueue) == 0 {
+		if len(s.permanentHandles) > 0 {
+			out := make([]source.SessionHandle, len(s.permanentHandles))
+			copy(out, s.permanentHandles)
+			return out, nil
+		}
 		return nil, nil
 	}
 	r := s.discoverQueue[0]
@@ -183,5 +190,26 @@ func (s *Source) QueueParseResult(sessionID string, update source.SourceUpdate, 
 		update: update,
 		cursor: cursor,
 		err:    err,
+	})
+}
+
+// SetHandles sets permanent handles returned by Discover when the queue is
+// empty. Unlike WithHandles (which queues a one-shot result), SetHandles
+// persists across all subsequent Discover calls. Convenience method for tests.
+func (s *Source) SetHandles(handles []source.SessionHandle) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.permanentHandles = make([]source.SessionHandle, len(handles))
+	copy(s.permanentHandles, handles)
+}
+
+// AddUpdate queues a Parse result for the given sessionID with no error.
+// Convenience method for tests.
+func (s *Source) AddUpdate(sessionID string, update source.SourceUpdate, cursor source.Cursor) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.parseQueues[sessionID] = append(s.parseQueues[sessionID], parseResult{
+		update: update,
+		cursor: cursor,
 	})
 }

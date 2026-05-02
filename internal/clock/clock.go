@@ -31,6 +31,11 @@ func New() Clock {
 	return RealClock{}
 }
 
+// Wall returns a Clock backed by the system clock. Alias for New.
+func Wall() Clock {
+	return RealClock{}
+}
+
 // Now returns the current system time.
 func (RealClock) Now() time.Time {
 	return time.Now()
@@ -51,6 +56,14 @@ func (r *realTicker) C() <-chan time.Time {
 
 func (r *realTicker) Stop() {
 	r.t.Stop()
+}
+
+// Mock is an alias for FakeClock for convenience.
+type Mock = FakeClock
+
+// NewMock is an alias for NewFake for convenience.
+func NewMock(initial time.Time) *FakeClock {
+	return NewFake(initial)
 }
 
 // FakeClock is a Clock with controllable time for deterministic tests.
