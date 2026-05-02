@@ -265,66 +265,116 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			Source:    s.Source,
 			From:      session.LifecycleTerminal,
 			At:        now,
-			Reason:    "retention window expired",
+			Reason:    "retention expired",
 		})
 	}
 	m.mu.Unlock()
 
 	// Deliver events to sinks outside any lock.
 	if m.cfg.sink != nil {
-		for i := 0; i < len(lifecycles); i++ {
-			lc := lifecycles[i]
-			seq := m.seq.Add(1)
-			ev := Event{
-				Seq:       seq,
-				At:        lc.At,
-				Type:      EventLifecycle,
-				Lifecycle: &lc,
-			}
-			if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
-				m.cfg.logger.Warn("sink error",
-					"type", ev.Type,
-					"error", err,
-				)
-			}
-		}
+		m.emitLifecycleEvents(ctx, lifecycles)
 
 		if len(updates) > 0 || len(removedIDs) > 0 {
-			seq := m.seq.Add(1)
-			ev := Event{
-				Seq:     seq,
+			m.emitEvent(ctx, Event{
+				Seq:     m.seq.Add(1),
 				At:      m.cfg.clock.Now(),
 				Type:    EventDelta,
 				Updates: updates,
 				Removed: removedIDs,
-			}
-			if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
-				m.cfg.logger.Warn("sink error",
-					"type", ev.Type,
-					"error", err,
-				)
-			}
+			})
 		}
 
 		for i := 0; i < len(healthEvents); i++ {
 			h := healthEvents[i]
-			seq := m.seq.Add(1)
-			ev := Event{
-				Seq:    seq,
+			m.emitEvent(ctx, Event{
+				Seq:    m.seq.Add(1),
 				At:     h.UpdatedAt,
 				Type:   EventHealth,
 				Health: &h,
-			}
-			if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
-				m.cfg.logger.Warn("sink error",
-					"type", ev.Type,
-					"error", err,
-				)
-			}
+			})
 		}
 	}
 
 	return nil
+}
+
+// Run starts the monitor loop. It polls sources at the configured interval
+// and reaps terminal sessions whose retention window has expired.
+// Run blocks until ctx is canceled and returns ctx.Err().
+func (m *Monitor) Run(ctx context.Context) error {
+	ticker := m.cfg.clock.NewTicker(m.cfg.pollInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-ticker.C():
+			if err := m.PollOnce(ctx); err != nil {
+				return err
+			}
+			m.reapTerminal(ctx)
+		}
+	}
+}
+
+// reapTerminal removes terminal sessions whose retention window has expired
+// and emits EventRemoved lifecycle events for each removal.
+func (m *Monitor) reapTerminal(ctx context.Context) {
+	now := m.cfg.clock.Now()
+
+	m.mu.Lock()
+	var removals []session.LifecycleEvent
+	for id, state := range m.store {
+		if state.Lifecycle != session.LifecycleTerminal {
+			continue
+		}
+		if state.CompletedAt == nil {
+			continue
+		}
+		if now.Sub(*state.CompletedAt) < m.cfg.completionRetention {
+			continue
+		}
+		delete(m.store, id)
+		m.removed[id] = struct{}{}
+		removals = append(removals, session.LifecycleEvent{
+			Type:      session.EventRemoved,
+			SessionID: id,
+			Source:    state.Source,
+			From:      session.LifecycleTerminal,
+			At:        now,
+			Reason:    "retention expired",
+		})
+	}
+	m.mu.Unlock()
+
+	if m.cfg.sink != nil && len(removals) > 0 {
+		m.emitLifecycleEvents(ctx, removals)
+	}
+}
+
+// emitLifecycleEvents wraps each lifecycle event in an Event envelope and
+// delivers it to the sink. Must be called outside store locks.
+func (m *Monitor) emitLifecycleEvents(ctx context.Context, events []session.LifecycleEvent) {
+	for i := 0; i < len(events); i++ {
+		lc := events[i]
+		m.emitEvent(ctx, Event{
+			Seq:       m.seq.Add(1),
+			At:        lc.At,
+			Type:      EventLifecycle,
+			Lifecycle: &lc,
+		})
+	}
+}
+
+// emitEvent delivers a single event to the sink and logs any error.
+func (m *Monitor) emitEvent(ctx context.Context, ev Event) {
+	if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
+		m.cfg.logger.Warn("sink error",
+			"type", ev.Type,
+			"error", err,
+		)
+	}
 }
 
 // getOrCreateHealth returns the sourceHealth for the named source,
