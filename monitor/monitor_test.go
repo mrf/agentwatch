@@ -3,6 +3,9 @@ package monitor_test
 import (
 	"context"
 	"errors"
+	"fmt"
+	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -45,6 +48,19 @@ func (s *errSink) HandleEvent(_ context.Context, _ monitor.Event) error {
 
 func testClock() *clock.Mock {
 	return clock.NewMock(time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC))
+}
+
+// findLifecycleEvent searches events for a lifecycle event of the given type.
+// Returns the event and true if found, or zero Event and false otherwise.
+func findLifecycleEvent(events []monitor.Event, lcType session.LifecycleEventType) (monitor.Event, bool) {
+	for i := 0; i < len(events); i++ {
+		ev := events[i]
+		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
+			ev.Lifecycle.Type == lcType {
+			return ev, true
+		}
+	}
+	return monitor.Event{}, false
 }
 
 // --- New tests ---
@@ -456,19 +472,12 @@ func TestPollOnce_TerminalTransition(t *testing.T) {
 	}
 
 	// Check lifecycle event was delivered.
-	var found bool
-	for i := 0; i < len(sink.events); i++ {
-		ev := sink.events[i]
-		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
-			ev.Lifecycle.Type == session.EventTerminal {
-			found = true
-			if ev.Lifecycle.Reason != "completed" {
-				t.Errorf("Lifecycle.Reason = %q, want %q", ev.Lifecycle.Reason, "completed")
-			}
-		}
-	}
+	ev, found := findLifecycleEvent(sink.events, session.EventTerminal)
 	if !found {
-		t.Error("no terminal lifecycle event delivered")
+		t.Fatal("no terminal lifecycle event delivered")
+	}
+	if ev.Lifecycle.Reason != "completed" {
+		t.Errorf("Lifecycle.Reason = %q, want %q", ev.Lifecycle.Reason, "completed")
 	}
 }
 
@@ -541,22 +550,15 @@ func TestPollOnce_ResumedFromTerminal(t *testing.T) {
 	}
 
 	// Verify resumed lifecycle event.
-	var resumeFound bool
-	for i := 0; i < len(sink.events); i++ {
-		ev := sink.events[i]
-		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
-			ev.Lifecycle.Type == session.EventResumed {
-			resumeFound = true
-			if ev.Lifecycle.From != session.LifecycleTerminal {
-				t.Errorf("resume From = %q, want %q", ev.Lifecycle.From, session.LifecycleTerminal)
-			}
-			if ev.Lifecycle.To != session.LifecycleActive {
-				t.Errorf("resume To = %q, want %q", ev.Lifecycle.To, session.LifecycleActive)
-			}
-		}
+	resumedEv, found := findLifecycleEvent(sink.events, session.EventResumed)
+	if !found {
+		t.Fatal("no resumed lifecycle event delivered")
 	}
-	if !resumeFound {
-		t.Error("no resumed lifecycle event delivered")
+	if resumedEv.Lifecycle.From != session.LifecycleTerminal {
+		t.Errorf("resume From = %q, want %q", resumedEv.Lifecycle.From, session.LifecycleTerminal)
+	}
+	if resumedEv.Lifecycle.To != session.LifecycleActive {
+		t.Errorf("resume To = %q, want %q", resumedEv.Lifecycle.To, session.LifecycleActive)
 	}
 }
 
@@ -890,4 +892,654 @@ func TestPollOnce_TerminalDefaultEndedAt(t *testing.T) {
 	if !snap[0].CompletedAt.Equal(clk.Now()) {
 		t.Errorf("CompletedAt = %v, want %v (clock.Now fallback)", *snap[0].CompletedAt, clk.Now())
 	}
+}
+
+// --- Run integration tests ---
+
+// yieldToRun gives the Run goroutine time to start and create its ticker.
+// Without this, clk.Advance may fire before the ticker exists.
+func yieldToRun() {
+	runtime.Gosched()
+	time.Sleep(10 * time.Millisecond)
+}
+
+// waitForEvent reads from eventCh with a real-time deadline as a safety net.
+func waitForEvent(t *testing.T, eventCh <-chan monitor.Event) monitor.Event {
+	t.Helper()
+	select {
+	case ev := <-eventCh:
+		return ev
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for event")
+		return monitor.Event{}
+	}
+}
+
+// waitForDone waits for the Run goroutine to finish.
+func waitForDone(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(2 * time.Second):
+		t.Fatal("timed out waiting for Run to return")
+		return nil
+	}
+}
+
+func TestRun_TickDrivesPollOnce(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Trigger first tick.
+	clk.Advance(time.Second)
+
+	// Expect lifecycle(discovered) + delta from first poll.
+	ev1 := waitForEvent(t, eventCh)
+	if ev1.Type != monitor.EventLifecycle {
+		t.Errorf("first event type = %q, want %q", ev1.Type, monitor.EventLifecycle)
+	}
+	ev2 := waitForEvent(t, eventCh)
+	if ev2.Type != monitor.EventDelta {
+		t.Errorf("second event type = %q, want %q", ev2.Type, monitor.EventDelta)
+	}
+
+	// Snapshot should show the session.
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].ID != "s1" {
+		t.Errorf("session ID = %q, want %q", snap[0].ID, "s1")
+	}
+
+	cancel()
+	runErr := waitForDone(t, done)
+	if !errors.Is(runErr, context.Canceled) {
+		t.Errorf("Run returned %v, want context.Canceled", runErr)
+	}
+}
+
+func TestRun_StopsOnContextCancel(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+
+	// Cancel immediately — Run should exit without needing a tick.
+	cancel()
+
+	runErr := waitForDone(t, done)
+	if !errors.Is(runErr, context.Canceled) {
+		t.Errorf("Run returned %v, want context.Canceled", runErr)
+	}
+}
+
+func TestRun_MultipleTicks(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// First tick: discover.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Tick 1: discover s1.
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Queue second update and tick.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityIdle,
+	}, "c2")
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle(updated)
+	_ = waitForEvent(t, eventCh) // delta
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].Activity != session.ActivityIdle {
+		t.Errorf("Activity = %q, want %q", snap[0].Activity, session.ActivityIdle)
+	}
+
+	cancel()
+	_ = waitForDone(t, done)
+}
+
+func TestRun_CompletionRetention_RemovesTerminalSession(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Tick 1: active.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+		monitor.WithCompletionRetention(10*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Tick 1: discover.
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle(discovered)
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Tick 2: terminal.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "completed",
+	}, "c2")
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle(terminal)
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Session is terminal but within retention.
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session still in store, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleTerminal {
+		t.Errorf("Lifecycle = %q, want terminal", snap[0].Lifecycle)
+	}
+
+	// Advance past retention (10s) and trigger tick.
+	clk.Advance(11 * time.Second)
+
+	// reapTerminal emits EventRemoved.
+	ev := waitForEvent(t, eventCh)
+	if ev.Type != monitor.EventLifecycle {
+		t.Fatalf("expected lifecycle event, got %q", ev.Type)
+	}
+	if ev.Lifecycle == nil {
+		t.Fatal("lifecycle event has nil Lifecycle")
+	}
+	if ev.Lifecycle.Type != session.EventRemoved {
+		t.Errorf("lifecycle type = %q, want %q", ev.Lifecycle.Type, session.EventRemoved)
+	}
+	if ev.Lifecycle.SessionID != "s1" {
+		t.Errorf("lifecycle SessionID = %q, want %q", ev.Lifecycle.SessionID, "s1")
+	}
+	if ev.Lifecycle.From != session.LifecycleTerminal {
+		t.Errorf("lifecycle From = %q, want %q", ev.Lifecycle.From, session.LifecycleTerminal)
+	}
+	if ev.Lifecycle.Reason != "retention expired" {
+		t.Errorf("lifecycle Reason = %q, want %q", ev.Lifecycle.Reason, "retention expired")
+	}
+
+	// Session should be gone from snapshot.
+	snap = m.Snapshot()
+	if len(snap) != 0 {
+		t.Errorf("expected 0 sessions after retention, got %d", len(snap))
+	}
+
+	cancel()
+	_ = waitForDone(t, done)
+}
+
+func TestRun_RetentionNotExpired_SessionRetained(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+		monitor.WithCompletionRetention(30*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Tick 1: discover.
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Tick 2: terminal.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "done",
+	}, "c2")
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle(terminal)
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Advance within retention (only 5s, retention is 30s).
+	clk.Advance(5 * time.Second)
+
+	// Give Run a moment to process the tick (no events expected for no-data poll).
+	time.Sleep(50 * time.Millisecond)
+
+	// Session should still be in store.
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Errorf("expected 1 session (within retention), got %d", len(snap))
+	}
+
+	cancel()
+	_ = waitForDone(t, done)
+}
+
+func TestRun_RemovedSessionResumes(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+		monitor.WithCompletionRetention(5*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Tick 1: discover s1 active.
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle(discovered)
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Tick 2: terminal.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "done",
+	}, "c2")
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh) // lifecycle(terminal)
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Tick 3: advance past retention → reap.
+	clk.Advance(6 * time.Second)
+	removedEv := waitForEvent(t, eventCh) // lifecycle(removed)
+	if removedEv.Lifecycle.Type != session.EventRemoved {
+		t.Fatalf("expected removed event, got %q", removedEv.Lifecycle.Type)
+	}
+
+	// Snapshot should be empty.
+	snap := m.Snapshot()
+	if len(snap) != 0 {
+		t.Fatalf("expected 0 sessions after removal, got %d", len(snap))
+	}
+
+	// Queue new data for the removed session.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "sonnet",
+	}, "c3")
+
+	// Tick 4: session reappears → should be "resumed", not "discovered".
+	clk.Advance(time.Second)
+	resumedEv := waitForEvent(t, eventCh) // lifecycle(resumed)
+	if resumedEv.Type != monitor.EventLifecycle {
+		t.Fatalf("expected lifecycle event, got %q", resumedEv.Type)
+	}
+	if resumedEv.Lifecycle.Type != session.EventResumed {
+		t.Errorf("lifecycle type = %q, want %q", resumedEv.Lifecycle.Type, session.EventResumed)
+	}
+	if resumedEv.Lifecycle.From != session.LifecycleTerminal {
+		t.Errorf("lifecycle From = %q, want %q", resumedEv.Lifecycle.From, session.LifecycleTerminal)
+	}
+	if resumedEv.Lifecycle.To != session.LifecycleActive {
+		t.Errorf("lifecycle To = %q, want %q", resumedEv.Lifecycle.To, session.LifecycleActive)
+	}
+
+	_ = waitForEvent(t, eventCh) // delta
+
+	// Session should be back in snapshot.
+	snap = m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session after resume, got %d", len(snap))
+	}
+	if snap[0].Lifecycle != session.LifecycleActive {
+		t.Errorf("Lifecycle = %q, want active", snap[0].Lifecycle)
+	}
+	if snap[0].Model != "sonnet" {
+		t.Errorf("Model = %q, want %q", snap[0].Model, "sonnet")
+	}
+
+	cancel()
+	_ = waitForDone(t, done)
+}
+
+func TestRun_EventSeqMonotonicAcrossTicks(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Tick 1.
+	clk.Advance(time.Second)
+	ev1 := waitForEvent(t, eventCh) // lifecycle
+	ev2 := waitForEvent(t, eventCh) // delta
+
+	// Tick 2 with update.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityIdle,
+	}, "c2")
+	clk.Advance(time.Second)
+	ev3 := waitForEvent(t, eventCh) // lifecycle(updated)
+	ev4 := waitForEvent(t, eventCh) // delta
+
+	// All seq numbers must be strictly increasing.
+	seqs := []uint64{ev1.Seq, ev2.Seq, ev3.Seq, ev4.Seq}
+	for i := 1; i < len(seqs); i++ {
+		if seqs[i] <= seqs[i-1] {
+			t.Errorf("seq[%d]=%d not greater than seq[%d]=%d",
+				i, seqs[i], i-1, seqs[i-1])
+		}
+	}
+
+	cancel()
+	_ = waitForDone(t, done)
+}
+
+func TestRun_CompletionRetention_WithRemovalEvent(t *testing.T) {
+	// Verify that the EventRemoved seq is consistent with other events.
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	var allSeqs []uint64
+	var mu sync.Mutex
+	eventCh := make(chan monitor.Event, 100)
+	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
+		mu.Lock()
+		allSeqs = append(allSeqs, ev.Seq)
+		mu.Unlock()
+		eventCh <- ev
+		return nil
+	})
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+		monitor.WithCompletionRetention(5*time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Tick 1: discover.
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh)
+	_ = waitForEvent(t, eventCh)
+
+	// Tick 2: terminal.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Terminal:  true,
+		EndReason: "done",
+	}, "c2")
+	clk.Advance(time.Second)
+	_ = waitForEvent(t, eventCh)
+	_ = waitForEvent(t, eventCh)
+
+	// Tick 3: reap.
+	clk.Advance(6 * time.Second)
+	_ = waitForEvent(t, eventCh) // removed
+
+	cancel()
+	_ = waitForDone(t, done)
+
+	// All seq numbers must be strictly increasing.
+	mu.Lock()
+	defer mu.Unlock()
+	for i := 1; i < len(allSeqs); i++ {
+		if allSeqs[i] <= allSeqs[i-1] {
+			t.Errorf("seq[%d]=%d not greater than seq[%d]=%d",
+				i, allSeqs[i], i-1, allSeqs[i-1])
+		}
+	}
+}
+
+// TestRun_Race exercises concurrent Run + Snapshot under the race detector.
+func TestRun_Race(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithPollInterval(time.Second),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	done := make(chan error, 1)
+	go func() { done <- m.Run(ctx) }()
+	yieldToRun()
+
+	// Concurrently advance clock and take snapshots.
+	snapshotDone := make(chan struct{})
+	go func() {
+		defer close(snapshotDone)
+		for i := 0; i < 50; i++ {
+			_ = m.Snapshot()
+		}
+	}()
+
+	for i := 0; i < 10; i++ {
+		clk.Advance(time.Second)
+		src.AddUpdate("s1", source.SourceUpdate{
+			SessionID: "s1",
+			Activity:  session.ActivityWorking,
+		}, source.Cursor(fmt.Sprintf("c%d", i+2)))
+		time.Sleep(time.Millisecond) // let goroutines interleave
+	}
+
+	<-snapshotDone
+	cancel()
+	_ = waitForDone(t, done)
 }
