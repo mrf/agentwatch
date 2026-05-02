@@ -460,3 +460,24 @@ func (m *Monitor) Snapshot() []session.SessionState {
 	m.mu.Unlock()
 	return states
 }
+
+// Get returns a deep copy of the session with the given ID and true,
+// or a zero SessionState and false if no session with that ID exists.
+func (m *Monitor) Get(id string) (session.SessionState, bool) {
+	m.mu.Lock()
+	s, ok := m.store[id]
+	if ok {
+		s = s.Clone()
+	}
+	m.mu.Unlock()
+	return s, ok
+}
+
+// Sources returns the names of all configured sources in their registration order.
+func (m *Monitor) Sources() []string {
+	names := make([]string, len(m.cfg.sources))
+	for i := 0; i < len(m.cfg.sources); i++ {
+		names[i] = m.cfg.sources[i].Name()
+	}
+	return names
+}
