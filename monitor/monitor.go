@@ -20,6 +20,7 @@ type Monitor struct {
 	mu      sync.Mutex
 	store   map[string]session.SessionState
 	cursors map[string]source.Cursor // "source:sessionID" -> cursor
+	health  map[string]*sourceHealth // keyed by source name
 
 	seq atomic.Uint64
 }
@@ -40,6 +41,7 @@ func New(opts ...Option) (*Monitor, error) {
 		cfg:     cfg,
 		store:   make(map[string]session.SessionState),
 		cursors: make(map[string]source.Cursor),
+		health:  make(map[string]*sourceHealth),
 	}, nil
 }
 
@@ -53,8 +55,9 @@ func cursorKey(sourceName, sessionID string) string {
 // do not stop the poll. Returns ctx.Err() if the context is canceled.
 func (m *Monitor) PollOnce(ctx context.Context) error {
 	var (
-		updates    []session.SessionState
-		lifecycles []session.LifecycleEvent
+		updates      []session.SessionState
+		lifecycles   []session.LifecycleEvent
+		healthEvents []Health
 	)
 
 	for i := 0; i < len(m.cfg.sources); i++ {
@@ -63,13 +66,22 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		}
 
 		src := m.cfg.sources[i]
+		srcName := src.Name()
+		parseFailCount := 0
 
 		handles, err := src.Discover(ctx)
 		if err != nil {
 			m.cfg.logger.Warn("discover failed",
-				"source", src.Name(),
+				"source", srcName,
 				"error", err,
 			)
+
+			if h, changed := m.recordHealthFailure(srcName, func(sh *sourceHealth) {
+				sh.discoverFailures++
+				sh.lastError = sanitizeError(err.Error())
+			}); changed {
+				healthEvents = append(healthEvents, h)
+			}
 			continue
 		}
 
@@ -79,7 +91,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			}
 
 			h := handles[j]
-			cKey := cursorKey(src.Name(), h.ID)
+			cKey := cursorKey(srcName, h.ID)
 
 			m.mu.Lock()
 			cursor := m.cursors[cKey]
@@ -88,10 +100,11 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			update, newCursor, parseErr := src.Parse(ctx, h, cursor)
 			if parseErr != nil {
 				m.cfg.logger.Warn("parse failed",
-					"source", src.Name(),
+					"source", srcName,
 					"session", h.ID,
 					"error", parseErr,
 				)
+				parseFailCount++
 				continue
 			}
 
@@ -164,18 +177,48 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			updates = append(updates, cloned)
 			lifecycles = append(lifecycles, lcEvent)
 		}
+
+		// Update health for this source after processing all handles.
+		if parseFailCount > 0 {
+			if h, changed := m.recordHealthFailure(srcName, func(sh *sourceHealth) {
+				sh.parseFailures += parseFailCount
+				sh.lastError = sanitizeError("parse failure")
+			}); changed {
+				healthEvents = append(healthEvents, h)
+			}
+		} else {
+			if h, changed := m.recordHealthSuccess(srcName); changed {
+				healthEvents = append(healthEvents, h)
+			}
+		}
 	}
 
 	// Deliver events to sinks outside any lock.
-	if m.cfg.sink != nil && len(updates) > 0 {
-		for i := 0; i < len(lifecycles); i++ {
-			lc := lifecycles[i]
+	if m.cfg.sink != nil {
+		if len(updates) > 0 {
+			for i := 0; i < len(lifecycles); i++ {
+				lc := lifecycles[i]
+				seq := m.seq.Add(1)
+				ev := Event{
+					Seq:       seq,
+					At:        lc.At,
+					Type:      EventLifecycle,
+					Lifecycle: &lc,
+				}
+				if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
+					m.cfg.logger.Warn("sink error",
+						"type", ev.Type,
+						"error", err,
+					)
+				}
+			}
+
 			seq := m.seq.Add(1)
 			ev := Event{
-				Seq:       seq,
-				At:        lc.At,
-				Type:      EventLifecycle,
-				Lifecycle: &lc,
+				Seq:     seq,
+				At:      m.cfg.clock.Now(),
+				Type:    EventDelta,
+				Updates: updates,
 			}
 			if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
 				m.cfg.logger.Warn("sink error",
@@ -185,22 +228,95 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			}
 		}
 
-		seq := m.seq.Add(1)
-		ev := Event{
-			Seq:     seq,
-			At:      m.cfg.clock.Now(),
-			Type:    EventDelta,
-			Updates: updates,
-		}
-		if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
-			m.cfg.logger.Warn("sink error",
-				"type", ev.Type,
-				"error", err,
-			)
+		for i := 0; i < len(healthEvents); i++ {
+			h := healthEvents[i]
+			seq := m.seq.Add(1)
+			ev := Event{
+				Seq:    seq,
+				At:     h.UpdatedAt,
+				Type:   EventHealth,
+				Health: &h,
+			}
+			if err := m.cfg.sink.HandleEvent(ctx, ev); err != nil {
+				m.cfg.logger.Warn("sink error",
+					"type", ev.Type,
+					"error", err,
+				)
+			}
 		}
 	}
 
 	return nil
+}
+
+// getOrCreateHealth returns the sourceHealth for the named source,
+// creating it if it doesn't exist. Must be called with m.mu held.
+func (m *Monitor) getOrCreateHealth(name string) *sourceHealth {
+	sh, ok := m.health[name]
+	if !ok {
+		sh = &sourceHealth{status: HealthHealthy}
+		m.health[name] = sh
+	}
+	return sh
+}
+
+// snapshotHealth returns a Health snapshot from sourceHealth.
+// Must be called with m.mu held.
+func (m *Monitor) snapshotHealth(name string, sh *sourceHealth) Health {
+	return Health{
+		Source:           name,
+		Status:           sh.status,
+		DiscoverFailures: sh.discoverFailures,
+		ParseFailures:    sh.parseFailures,
+		LastError:        sh.lastError,
+		UpdatedAt:        sh.updatedAt,
+	}
+}
+
+// recordHealthFailure applies fn to the source's health state (fn should
+// increment failure counters and set lastError), recomputes the status, and
+// returns a snapshot plus whether the status changed. Thread-safe.
+func (m *Monitor) recordHealthFailure(name string, fn func(*sourceHealth)) (Health, bool) {
+	m.mu.Lock()
+	sh := m.getOrCreateHealth(name)
+	prev := sh.status
+	fn(sh)
+	sh.updatedAt = m.cfg.clock.Now()
+	sh.status = computeStatus(sh.totalFailures(), m.cfg.healthThreshold)
+	changed := sh.status != prev
+	snapshot := m.snapshotHealth(name, sh)
+	m.mu.Unlock()
+	return snapshot, changed
+}
+
+// recordHealthSuccess resets a source's health counters after a fully
+// successful poll and returns a snapshot plus whether the status changed.
+// Thread-safe.
+func (m *Monitor) recordHealthSuccess(name string) (Health, bool) {
+	m.mu.Lock()
+	sh := m.getOrCreateHealth(name)
+	prev := sh.status
+	sh.discoverFailures = 0
+	sh.parseFailures = 0
+	sh.lastError = ""
+	sh.updatedAt = m.cfg.clock.Now()
+	sh.status = computeStatus(sh.totalFailures(), m.cfg.healthThreshold)
+	changed := sh.status != prev
+	snapshot := m.snapshotHealth(name, sh)
+	m.mu.Unlock()
+	return snapshot, changed
+}
+
+// Health returns the current health state for all sources.
+// The returned map is safe to read and mutate without affecting the monitor.
+func (m *Monitor) Health() map[string]Health {
+	m.mu.Lock()
+	result := make(map[string]Health, len(m.health))
+	for name, sh := range m.health {
+		result[name] = m.snapshotHealth(name, sh)
+	}
+	m.mu.Unlock()
+	return result
 }
 
 // applyUpdate merges a SourceUpdate into a SessionState.

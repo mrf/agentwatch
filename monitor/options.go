@@ -18,6 +18,7 @@ type config struct {
 	logger              *slog.Logger
 	clock               clock.Clock
 	completionRetention time.Duration
+	healthThreshold     int
 }
 
 func defaultConfig() config {
@@ -26,6 +27,7 @@ func defaultConfig() config {
 		clock:               clock.Wall(),
 		logger:              slog.Default(),
 		completionRetention: 30 * time.Second,
+		healthThreshold:     3,
 	}
 }
 
@@ -69,5 +71,14 @@ func WithClock(c clock.Clock) Option {
 func WithCompletionRetention(d time.Duration) Option {
 	return func(c *config) {
 		c.completionRetention = d
+	}
+}
+
+// WithHealthThreshold sets the number of consecutive failures before a source
+// transitions from healthy to degraded. At 2*threshold it transitions to failed.
+// A successful poll resets the failure count and returns the source to healthy.
+func WithHealthThreshold(n int) Option {
+	return func(c *config) {
+		c.healthThreshold = n
 	}
 }
