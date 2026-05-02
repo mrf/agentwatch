@@ -1,0 +1,18 @@
+{
+  "conversationHistory": [
+    {
+      "role": "user",
+      "parts": [{"text": "hello, help me refactor this code"}]
+    },
+    {
+      "role": "model",
+      "parts": [{"text": "Sure, I can help you refactor the code."}],
+      "usageMetadata": {
+        "promptTokenCount": 20,
+        "candidatesTokenCount": 12,
+        "totalTokenCount": 32
+      }
+    }
+  ],
+  "model": "gemini-2.0-flash"
+}
