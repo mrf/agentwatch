@@ -284,12 +284,15 @@ func TestServer_SlowClientEviction(t *testing.T) {
 		_ = srv.HandleEvent(context.Background(), ev)
 	}
 
-	// Give eviction a moment to propagate.
-	time.Sleep(50 * time.Millisecond)
-
-	if got := srv.ClientCount(); got != 0 {
-		t.Fatalf("expected 0 clients after slow-client eviction, got %d", got)
+	// Give eviction a moment to propagate — race detector on CI can be slow.
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if srv.ClientCount() == 0 {
+			return
+		}
+		time.Sleep(20 * time.Millisecond)
 	}
+	t.Fatalf("expected 0 clients after slow-client eviction, got %d", srv.ClientCount())
 }
 
 func TestServer_LifecycleEvent(t *testing.T) {
