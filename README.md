@@ -1,5 +1,8 @@
 # agentwatch
 
+[![Go Report Card](https://goreportcard.com/badge/github.com/mrf/agentwatch)](https://goreportcard.com/report/github.com/mrf/agentwatch)
+[![Go Reference](https://pkg.go.dev/badge/github.com/mrf/agentwatch.svg)](https://pkg.go.dev/github.com/mrf/agentwatch)
+
 A Go library for monitoring multiple local AI coding agents — Claude Code, OpenAI Codex CLI, Gemini CLI, and anything you can write a `Source` for.
 
 ## Overview

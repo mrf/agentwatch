@@ -103,7 +103,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Try to add the connection.
 	if !s.bcast.addConn(c) {
-		ws.Close(websocket.StatusTryAgainLater, "too many connections")
+		_ = ws.Close(websocket.StatusTryAgainLater, "too many connections")
 		return
 	}
 
@@ -175,7 +175,7 @@ func (s *Server) writePump(c *conn) {
 		}
 	}
 	// Channel closed — connection is being torn down.
-	c.ws.Close(websocket.StatusNormalClosure, "")
+	_ = c.ws.Close(websocket.StatusNormalClosure, "")
 }
 
 // readPump reads from the WebSocket until the client disconnects.

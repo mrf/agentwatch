@@ -41,7 +41,7 @@ func TestServer_Authenticator_Allowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("authenticated request should succeed: %v", err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 }
 
 func TestServer_Authenticator_Rejected(t *testing.T) {

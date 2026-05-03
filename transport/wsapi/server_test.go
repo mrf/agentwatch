@@ -98,7 +98,7 @@ func dialWSWithOrigin(t *testing.T, ts *httptest.Server, origin string) *websock
 	if err != nil {
 		t.Fatalf("websocket.Dial: %v", err)
 	}
-	t.Cleanup(func() { conn.CloseNow() })
+	t.Cleanup(func() { _ = conn.CloseNow() })
 	return conn
 }
 
@@ -254,7 +254,7 @@ func TestServer_MaxConnections(t *testing.T) {
 		if readErr == nil {
 			t.Fatal("third connection should have been rejected")
 		}
-		conn3.CloseNow()
+		_ = conn3.CloseNow()
 	}
 }
 

@@ -11,6 +11,7 @@ func TestClientRateLimiter_Basic(t *testing.T) {
 	limiter := newClientRateLimiter(2, time.Minute, 2)
 	if limiter == nil {
 		t.Fatal("newClientRateLimiter returned nil")
+		return
 	}
 
 	base := time.Unix(100, 0)

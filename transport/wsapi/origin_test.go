@@ -26,7 +26,7 @@ func TestServer_OriginDefault_SameOrigin(t *testing.T) {
 	if err != nil {
 		t.Fatalf("same-origin should be allowed: %v", err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 }
 
 func TestServer_OriginDefault_Localhost(t *testing.T) {
@@ -43,7 +43,7 @@ func TestServer_OriginDefault_Localhost(t *testing.T) {
 	if err != nil {
 		t.Fatalf("localhost should be allowed: %v", err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 }
 
 func TestServer_OriginDefault_127001(t *testing.T) {
@@ -59,7 +59,7 @@ func TestServer_OriginDefault_127001(t *testing.T) {
 	if err != nil {
 		t.Fatalf("127.0.0.1 should be allowed: %v", err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 }
 
 func TestServer_OriginDefault_NoOriginAllowed(t *testing.T) {
@@ -74,7 +74,7 @@ func TestServer_OriginDefault_NoOriginAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("no origin should be allowed: %v", err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 }
 
 func TestServer_OriginDefault_RemoteRejected(t *testing.T) {
@@ -108,7 +108,7 @@ func TestServer_OriginAllowlist_Allowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("allowlisted origin should be allowed: %v", err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 }
 
 func TestServer_OriginAllowlist_Rejected(t *testing.T) {

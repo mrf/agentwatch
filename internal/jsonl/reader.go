@@ -77,7 +77,7 @@ func ReadLines(path string, offset int64, opts Options) (lines [][]byte, nextOff
 	if err != nil {
 		return nil, offset, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	if offset > 0 {
 		if _, err = f.Seek(offset, io.SeekStart); err != nil {

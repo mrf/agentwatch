@@ -231,6 +231,7 @@ func TestParseLines_SubagentProgress(t *testing.T) {
 	sub := r.subagents["tu-agent-1"]
 	if sub == nil {
 		t.Fatal("expected subagent with toolUseID 'tu-agent-1'")
+		return
 	}
 	if sub.model != "claude-sonnet-4-6" {
 		t.Errorf("subagent model: got %q, want %q", sub.model, "claude-sonnet-4-6")
@@ -250,6 +251,7 @@ func TestParseLines_SubagentCompletion(t *testing.T) {
 	sub := r.subagents["tu-agent-1"]
 	if sub == nil {
 		t.Fatal("expected subagent 'tu-agent-1'")
+		return
 	}
 	if !sub.completed {
 		t.Error("expected subagent to be marked completed after tool_result")
@@ -268,6 +270,7 @@ func TestParseLines_SubagentToolCalls(t *testing.T) {
 	sub := r.subagents["tu-agent-1"]
 	if sub == nil {
 		t.Fatal("expected subagent 'tu-agent-1'")
+		return
 	}
 	if sub.toolCalls != 1 {
 		t.Errorf("subagent toolCalls: got %d, want 1", sub.toolCalls)
@@ -286,6 +289,7 @@ func TestParseLines_SubagentTokens(t *testing.T) {
 	sub := r.subagents["tu-agent-1"]
 	if sub == nil {
 		t.Fatal("expected subagent 'tu-agent-1'")
+		return
 	}
 	if sub.contextTokens != 30 {
 		t.Errorf("subagent contextTokens: got %d, want 30", sub.contextTokens)
@@ -318,6 +322,7 @@ func TestParseLines_SubagentCrossBatchCompletion(t *testing.T) {
 	sub1 := r1.subagents["tu-x"]
 	if sub1 == nil {
 		t.Fatal("expected subagent 'tu-x' in batch 1")
+		return
 	}
 	if sub1.completed {
 		t.Error("subagent should not be completed yet")
@@ -334,6 +339,7 @@ func TestParseLines_SubagentCrossBatchCompletion(t *testing.T) {
 	sub2 := r2.subagents["tu-x"]
 	if sub2 == nil {
 		t.Fatal("expected cross-batch subagent 'tu-x' in batch 2")
+		return
 	}
 	if !sub2.completed {
 		t.Error("expected subagent to be completed via cross-batch tool_result")
@@ -541,10 +547,10 @@ func TestParse_IncrementalCursor(t *testing.T) {
 		t.Fatalf("open for append: %v", err)
 	}
 	if _, err := f.WriteString(line3); err != nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatalf("append line3: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	u2, _, err := s.Parse(context.Background(), h, c1)
 	if err != nil {

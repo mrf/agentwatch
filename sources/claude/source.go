@@ -317,7 +317,7 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 	if err != nil {
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 
 	entries, err := f.ReadDir(256)
 	if err != nil {
