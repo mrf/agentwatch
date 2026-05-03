@@ -264,34 +264,43 @@ func TestServer_SlowClientEviction(t *testing.T) {
 	}
 
 	srv, ts := newTestServer(t, sessions,
-		wsapi.WithSendBuffer(4), // Small buffer for testing.
+		wsapi.WithSendBuffer(1),                    // Minimal buffer — fills after 1 queued msg.
+		wsapi.WithWriteTimeout(time.Millisecond),   // Tiny timeout so writes fail once TCP buffer fills.
 	)
 
 	conn := dialWS(t, ts)
 	// Read snapshot so we know we're connected.
 	readEvent(t, conn)
 
-	// Flood events to fill the buffer and trigger eviction.
-	for i := 0; i < 20; i++ {
+	// Stop reading — the TCP buffer will fill, writes will timeout,
+	// and/or the send channel will overflow triggering eviction.
+	// Send enough large events to saturate both the channel and TCP buffer.
+	bigPayload := make([]byte, 4096)
+	for i := range bigPayload {
+		bigPayload[i] = 'x'
+	}
+	for i := 0; i < 200; i++ {
 		ev := monitor.Event{
 			Seq:  uint64(i + 1),
 			At:   time.Now(),
 			Type: monitor.EventDelta,
 			Updates: []session.SessionState{
-				{ID: "sess-1", Activity: session.ActivityWorking},
+				{ID: string(bigPayload), Activity: session.ActivityWorking},
 			},
 		}
 		_ = srv.HandleEvent(context.Background(), ev)
 	}
 
-	// Give eviction a moment to propagate — race detector on CI can be slow.
-	deadline := time.Now().Add(2 * time.Second)
+	// Poll for eviction — either buffer-full or write-timeout path.
+	deadline := time.Now().Add(5 * time.Second)
 	for time.Now().Before(deadline) {
 		if srv.ClientCount() == 0 {
+			_ = conn.CloseNow()
 			return
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
+	_ = conn.CloseNow()
 	t.Fatalf("expected 0 clients after slow-client eviction, got %d", srv.ClientCount())
 }
 
