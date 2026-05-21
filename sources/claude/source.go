@@ -36,6 +36,15 @@ func WithRoot(path string) Option {
 	}
 }
 
+// WithDiscoverWindow limits discovery to JSONL files whose modification time
+// is within d of the current time. Zero disables age filtering but still uses
+// the efficient directory-mtime-caching walker.
+func WithDiscoverWindow(d time.Duration) Option {
+	return func(s *ClaudeSource) {
+		s.window = d
+	}
+}
+
 // WithSessionEndDir sets the directory where Claude Code deposits session-end
 // hook marker files. When set, Parse checks this directory for a matching
 // marker and signals Terminal=true on the SourceUpdate when one is found.
@@ -111,6 +120,7 @@ type claudeCursor struct {
 // configured with a non-empty root via WithRoot.
 type ClaudeSource struct {
 	root             string
+	window           time.Duration
 	sessionEndDir    string
 	maxEndMarkerSize int
 
@@ -145,11 +155,18 @@ func (s *ClaudeSource) Name() string { return "claude" }
 // .jsonl extension). StartedAt is set from the file modification time.
 // WorkingDir is populated by decoding the parent directory name (Claude Code
 // encodes project paths by replacing "/" with "-").
+//
+// When a discover window is set (WithDiscoverWindow), only files whose
+// modification time is within that window are returned. The filter uses the
+// real file mtime on every call (not a cached value) because Claude JSONL
+// files are appended to during a session — their mtime changes without
+// updating the parent directory's mtime.
 func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	if s.root == "" {
 		return nil, nil
 	}
 
+	now := time.Now()
 	var handles []source.SessionHandle
 	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
@@ -162,12 +179,17 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 			return nil
 		}
 
-		id := strings.TrimSuffix(d.Name(), ".jsonl")
-
-		var startedAt time.Time
-		if fi, ferr := d.Info(); ferr == nil {
-			startedAt = fi.ModTime()
+		fi, ferr := d.Info()
+		if ferr != nil {
+			return nil // skip unreadable files
 		}
+
+		// Age filter: skip files not modified within the discover window.
+		if s.window > 0 && now.Sub(fi.ModTime()) > s.window {
+			return nil
+		}
+
+		id := strings.TrimSuffix(d.Name(), ".jsonl")
 
 		// Decode the project path from the parent directory name.
 		// Claude Code encodes the working directory as the project directory
@@ -179,7 +201,7 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 			Path:       path,
 			WorkingDir: workingDir,
 			Source:     "claude",
-			StartedAt:  startedAt,
+			StartedAt:  fi.ModTime(),
 		})
 		return nil
 	})
