@@ -1,0 +1,4 @@
+{"type":"session","id":"ijkl9012","version":3,"timestamp":"2024-01-15T12:00:00Z","workingDir":"/home/user/project"}
+{"type":"message","id":"00000001","parentId":"ijkl9012","timestamp":"2024-01-15T12:00:05Z","message":{"role":"assistant","content":"Hello!","provider":"anthropic","model":"claude-3-5-sonnet-20241022","usage":{"input":50,"output":15},"stopReason":"end_turn","timestamp":"2024-01-15T12:00:05Z"}}
+{"type":"model_change","id":"00000002","parentId":"00000001","timestamp":"2024-01-15T12:00:10Z","provider":"anthropic","modelId":"claude-opus-4-6"}
+{"type":"message","id":"00000003","parentId":"00000002","timestamp":"2024-01-15T12:00:15Z","message":{"role":"user","content":"Use the new model please","timestamp":"2024-01-15T12:00:15Z"}}

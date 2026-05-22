@@ -1,0 +1,6 @@
+{"type":"session","id":"mnop3456","version":3,"timestamp":"2024-01-15T13:00:00Z","workingDir":"/home/user/project"}
+not valid json at all
+{"type":"message","id":"00000001","parentId":"mnop3456","timestamp":"2024-01-15T13:00:05Z","message":{"role":"user","content":"Hello"}}
+{"broken":
+{"type":"compaction","id":"00000002","parentId":"mnop3456","timestamp":"2024-01-15T13:00:10Z","tokensBefore":5000}
+{"type":"label","id":"00000003","parentId":"mnop3456","timestamp":"2024-01-15T13:00:15Z"}
