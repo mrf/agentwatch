@@ -421,15 +421,22 @@ func TestBuildSubagentStates_Empty(t *testing.T) {
 
 func TestBuildSubagentStates_Fields(t *testing.T) {
 	now := time.Now()
+	completedAt := now.Add(-10 * time.Second)
 	subs := map[string]*subagentResult{
 		"tu-1": {
 			id:              "tu-1",
 			parentToolUseID: "tu-parent",
 			slug:            "explore-agent",
+			model:           "claude-sonnet-4-6",
+			contextTokens:   200,
+			outputTokens:    40,
+			msgCount:        3,
+			toolCalls:       2,
 			activity:        session.ActivityWorking,
 			currentTool:     "Read",
 			firstTime:       now.Add(-time.Minute),
 			lastTime:        now,
+			completedAt:     completedAt,
 		},
 	}
 	states := buildSubagentStates(subs)
@@ -451,6 +458,101 @@ func TestBuildSubagentStates_Fields(t *testing.T) {
 	}
 	if s.CurrentTool != "Read" {
 		t.Errorf("CurrentTool: got %q", s.CurrentTool)
+	}
+	if s.Model != "claude-sonnet-4-6" {
+		t.Errorf("Model: got %q, want %q", s.Model, "claude-sonnet-4-6")
+	}
+	if s.ContextTokens != 200 {
+		t.Errorf("ContextTokens: got %d, want 200", s.ContextTokens)
+	}
+	if s.OutputTokens != 40 {
+		t.Errorf("OutputTokens: got %d, want 40", s.OutputTokens)
+	}
+	if s.MessageCount != 3 {
+		t.Errorf("MessageCount: got %d, want 3", s.MessageCount)
+	}
+	if s.ToolCallCount != 2 {
+		t.Errorf("ToolCallCount: got %d, want 2", s.ToolCallCount)
+	}
+	if !s.CompletedAt.Equal(completedAt) {
+		t.Errorf("CompletedAt: got %v, want %v", s.CompletedAt, completedAt)
+	}
+}
+
+func TestParseLines_SubagentMessageCount(t *testing.T) {
+	// The subagent_session fixture has 2 progress assistant entries,
+	// so the subagent should have MessageCount=2.
+	lines := fixtureLines(t, "subagent_session.jsonl")
+	r := parseLines(lines)
+
+	sub := r.subagents["tu-agent-1"]
+	if sub == nil {
+		t.Fatal("expected subagent 'tu-agent-1'")
+	}
+	if sub.msgCount != 2 {
+		t.Errorf("subagent msgCount: got %d, want 2", sub.msgCount)
+	}
+}
+
+func TestParseLines_SubagentCompletedAt(t *testing.T) {
+	// The tool_result user message is at 2026-01-01T12:00:05.000Z.
+	lines := fixtureLines(t, "subagent_session.jsonl")
+	r := parseLines(lines)
+
+	sub := r.subagents["tu-agent-1"]
+	if sub == nil {
+		t.Fatal("expected subagent 'tu-agent-1'")
+	}
+	if !sub.completed {
+		t.Fatal("expected subagent to be completed")
+	}
+	want := mustParseTime(t, "2026-01-01T12:00:05.000Z")
+	if !sub.completedAt.Equal(want) {
+		t.Errorf("subagent completedAt: got %v, want %v", sub.completedAt, want)
+	}
+}
+
+func TestParse_SubagentEnrichedFields(t *testing.T) {
+	// Integration test: verify that all new SubagentState fields are populated
+	// correctly through the full Parse path.
+	s := newTestSource(t)
+	h := source.SessionHandle{
+		ID:     "cccccccc-0000-0000-0000-000000000003",
+		Path:   filepath.Join("testdata", "subagent_session.jsonl"),
+		Source: "claude",
+	}
+
+	update, _, err := s.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(update.Subagents) != 1 {
+		t.Fatalf("Subagents: got %d, want 1", len(update.Subagents))
+	}
+	sub := update.Subagents[0]
+
+	if sub.Model != "claude-sonnet-4-6" {
+		t.Errorf("Model: got %q, want %q", sub.Model, "claude-sonnet-4-6")
+	}
+	// Last progress entry: input=30, cache_read=0, cache_creation=0 → contextTokens=30
+	if sub.ContextTokens != 30 {
+		t.Errorf("ContextTokens: got %d, want 30", sub.ContextTokens)
+	}
+	if sub.OutputTokens != 8 {
+		t.Errorf("OutputTokens: got %d, want 8", sub.OutputTokens)
+	}
+	// 2 assistant progress entries
+	if sub.MessageCount != 2 {
+		t.Errorf("MessageCount: got %d, want 2", sub.MessageCount)
+	}
+	// 1 tool_use (Read) in the second progress entry
+	if sub.ToolCallCount != 1 {
+		t.Errorf("ToolCallCount: got %d, want 1", sub.ToolCallCount)
+	}
+	// Completed by tool_result at 2026-01-01T12:00:05.000Z
+	want := mustParseTime(t, "2026-01-01T12:00:05.000Z")
+	if !sub.CompletedAt.Equal(want) {
+		t.Errorf("CompletedAt: got %v, want %v", sub.CompletedAt, want)
 	}
 }
 

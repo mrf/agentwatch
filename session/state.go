@@ -41,6 +41,13 @@ type SubagentState struct {
 	CurrentTool    string    `json:"currentTool,omitempty"`
 	StartedAt      time.Time `json:"startedAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
+
+	Model         string    `json:"model,omitempty"`
+	ContextTokens int       `json:"contextTokens"`
+	OutputTokens  int       `json:"outputTokens,omitempty"`
+	MessageCount  int       `json:"messageCount"`
+	ToolCallCount int       `json:"toolCallCount"`
+	CompletedAt   time.Time `json:"completedAt,omitempty"`
 }
 
 // SessionState is the public snapshot of a monitored agent session.
