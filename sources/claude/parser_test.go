@@ -397,6 +397,73 @@ func TestParseLines_ProgressSelfFilteredBySlug(t *testing.T) {
 	}
 }
 
+// --- Compaction tests ---
+
+func TestParseLines_CompactionEvent(t *testing.T) {
+	// A compaction record should increment compactionDelta and not affect other counts.
+	lines := [][]byte{
+		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z","summary":"compacted context"}`),
+	}
+	r := parseLines(lines)
+	if r.compactionDelta != 1 {
+		t.Errorf("compactionDelta: got %d, want 1", r.compactionDelta)
+	}
+	if r.msgDelta != 0 {
+		t.Errorf("msgDelta: got %d, want 0 (compaction must not count as a message)", r.msgDelta)
+	}
+}
+
+func TestParseLines_MultipleCompactionEvents(t *testing.T) {
+	// Multiple compaction records in one batch should accumulate.
+	lines := [][]byte{
+		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}`),
+		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:01:00.000Z"}`),
+		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:02:00.000Z"}`),
+	}
+	r := parseLines(lines)
+	if r.compactionDelta != 3 {
+		t.Errorf("compactionDelta: got %d, want 3", r.compactionDelta)
+	}
+}
+
+func TestParseLines_CompactionWithOtherRecords(t *testing.T) {
+	// Compaction records mixed with user/assistant records — only compactions
+	// should increment compactionDelta, not affect message count logic.
+	lines := [][]byte{
+		[]byte(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]},"cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z","gitBranch":"main"}`),
+		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:01.000Z"}`),
+		[]byte(`{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}},"cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:02.000Z","gitBranch":"main","slug":"test"}`),
+	}
+	r := parseLines(lines)
+	if r.compactionDelta != 1 {
+		t.Errorf("compactionDelta: got %d, want 1", r.compactionDelta)
+	}
+	if r.msgDelta != 2 {
+		t.Errorf("msgDelta: got %d, want 2 (user + assistant)", r.msgDelta)
+	}
+}
+
+func TestParse_CompactionCountDeltaInSourceUpdate(t *testing.T) {
+	// Parse should propagate compactionDelta to SourceUpdate.CompactionCountDelta.
+	dir := t.TempDir()
+	path := filepath.Join(dir, "session.jsonl")
+	content := `{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]},"cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:01.000Z","gitBranch":"main"}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+		t.Fatalf("write: %v", err)
+	}
+
+	s := newTestSource(t)
+	h := source.SessionHandle{ID: "s1", Path: path, Source: "claude"}
+	update, _, err := s.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if update.CompactionCountDelta != 1 {
+		t.Errorf("CompactionCountDelta: got %d, want 1", update.CompactionCountDelta)
+	}
+}
+
 func mustParseTime(t *testing.T, s string) time.Time {
 	t.Helper()
 	ts, err := time.Parse(time.RFC3339Nano, s)

@@ -56,9 +56,10 @@ type SourceUpdate struct {
 	MaxContextTokens int  `json:"maxContextTokens"`
 	TokenEstimated   bool `json:"tokenEstimated"`
 
-	MessageCountDelta  int    `json:"messageCountDelta,omitempty"`
-	ToolCallCountDelta int    `json:"toolCallCountDelta,omitempty"`
-	CurrentTool        string `json:"currentTool,omitempty"`
+	MessageCountDelta    int    `json:"messageCountDelta,omitempty"`
+	ToolCallCountDelta   int    `json:"toolCallCountDelta,omitempty"`
+	CompactionCountDelta int    `json:"compactionCountDelta,omitempty"`
+	CurrentTool          string `json:"currentTool,omitempty"`
 
 	WorkingDir string `json:"workingDir,omitempty"`
 	Branch     string `json:"branch,omitempty"`

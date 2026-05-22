@@ -374,6 +374,63 @@ func TestPollOnce_UpdatePropagation(t *testing.T) {
 	}
 }
 
+// --- PollOnce: compaction accumulation ---
+
+func TestPollOnce_CompactionAccumulation(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// First poll: one compaction event.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID:            "s1",
+		Activity:             session.ActivityWorking,
+		CompactionCountDelta: 1,
+	}, "c1")
+
+	m, err := monitor.New(monitor.WithSources(src), monitor.WithClock(clk))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	if snap[0].CompactionCount != 1 {
+		t.Errorf("CompactionCount after first poll = %d, want 1", snap[0].CompactionCount)
+	}
+
+	// Second poll: two more compaction events.
+	clk.Advance(5 * time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID:            "s1",
+		Activity:             session.ActivityWorking,
+		CompactionCountDelta: 2,
+	}, "c2")
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	snap = m.Snapshot()
+	if len(snap) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap))
+	}
+	// Accumulated: 1 + 2 = 3.
+	if snap[0].CompactionCount != 3 {
+		t.Errorf("CompactionCount after second poll = %d, want 3", snap[0].CompactionCount)
+	}
+}
+
 // --- PollOnce: context utilization ---
 
 func TestPollOnce_ContextUtilization(t *testing.T) {

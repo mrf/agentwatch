@@ -89,9 +89,10 @@ type parseResult struct {
 	contextTokens int
 	outputTokens  int
 
-	msgDelta    int
-	toolDelta   int
-	currentTool string
+	msgDelta        int
+	toolDelta       int
+	compactionDelta int
+	currentTool     string
 
 	activity       session.Activity
 	startedAt      time.Time
@@ -215,6 +216,9 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 
 		case "progress":
 			parseProgressRecord(&rec, line, &r)
+
+		case "compaction":
+			r.compactionDelta++
 		}
 	}
 

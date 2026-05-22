@@ -339,6 +339,7 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 		"CurrentTool":        true, // not sensitive (tool name, not content)
 		"MessageCount":       true, // not sensitive
 		"ToolCallCount":      true, // not sensitive
+		"CompactionCount":    true, // not sensitive (aggregate metric)
 		"StartedAt":          true, // not sensitive
 		"LastActivityAt":     true, // not sensitive
 		"LastDataReceivedAt": true, // not sensitive

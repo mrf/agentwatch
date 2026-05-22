@@ -524,6 +524,7 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 
 	state.MessageCount += u.MessageCountDelta
 	state.ToolCallCount += u.ToolCallCountDelta
+	state.CompactionCount += u.CompactionCountDelta
 
 	if u.CurrentTool != "" {
 		state.CurrentTool = u.CurrentTool

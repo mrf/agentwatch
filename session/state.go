@@ -63,8 +63,9 @@ type SessionState struct {
 	Branch      string `json:"branch,omitempty"`
 	CurrentTool string `json:"currentTool,omitempty"`
 
-	MessageCount  int `json:"messageCount"`
-	ToolCallCount int `json:"toolCallCount"`
+	MessageCount    int `json:"messageCount"`
+	ToolCallCount   int `json:"toolCallCount"`
+	CompactionCount int `json:"compactionCount"`
 
 	StartedAt          time.Time  `json:"startedAt"`
 	LastActivityAt     time.Time  `json:"lastActivityAt"`
