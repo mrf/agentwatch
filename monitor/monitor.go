@@ -237,6 +237,57 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		m.mu.Unlock()
 	}
 
+	// Sweep: mark active sessions as terminal when a parent session reports
+	// the corresponding subagent as completed. Match by slug.
+	{
+		now := m.cfg.clock.Now()
+		m.mu.Lock()
+
+		// Collect slugs of terminal subagents from all sessions.
+		completedSlugs := make(map[string]struct{})
+		for _, s := range m.store {
+			for i := 0; i < len(s.Subagents); i++ {
+				sub := s.Subagents[i]
+				if sub.Activity == session.ActivityTerminal && sub.Slug != "" {
+					completedSlugs[sub.Slug] = struct{}{}
+				}
+			}
+		}
+
+		// Mark active sessions whose slug matches a completed subagent.
+		if len(completedSlugs) > 0 {
+			for id, s := range m.store {
+				if s.Lifecycle != session.LifecycleActive {
+					continue
+				}
+				if s.Slug == "" {
+					continue
+				}
+				if _, ok := completedSlugs[s.Slug]; !ok {
+					continue
+				}
+				s.Lifecycle = session.LifecycleTerminal
+				completedAt := now
+				s.CompletedAt = &completedAt
+				m.store[id] = s
+
+				cloned := s.Clone()
+				updates = append(updates, cloned)
+				lifecycles = append(lifecycles, session.LifecycleEvent{
+					Type:      session.EventTerminal,
+					SessionID: id,
+					Source:    s.Source,
+					From:      session.LifecycleActive,
+					To:        session.LifecycleTerminal,
+					At:        now,
+					Reason:    "parent reported subagent completion",
+				})
+			}
+		}
+
+		m.mu.Unlock()
+	}
+
 	// Sweep: remove terminal sessions past retention window.
 	var removedIDs []string
 	now := m.cfg.clock.Now()

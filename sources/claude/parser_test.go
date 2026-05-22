@@ -346,6 +346,42 @@ func TestParseLines_SubagentCrossBatchCompletion(t *testing.T) {
 	}
 }
 
+func TestParseLines_SubagentSlugCaptured(t *testing.T) {
+	// Verify that the subagent's slug is captured from progress records.
+	lines := fixtureLines(t, "subagent_session.jsonl")
+	r := parseLines(lines)
+
+	sub := r.subagents["tu-agent-1"]
+	if sub == nil {
+		t.Fatal("expected subagent 'tu-agent-1'")
+		return
+	}
+	if sub.slug != "child-agent-slug" {
+		t.Errorf("subagent slug: got %q, want %q", sub.slug, "child-agent-slug")
+	}
+}
+
+func TestParse_SubagentSlugInSourceUpdate(t *testing.T) {
+	// Verify the slug propagates through to the SourceUpdate's SubagentState.
+	s := newTestSource(t)
+	h := source.SessionHandle{
+		ID:     "cccccccc-0000-0000-0000-000000000003",
+		Path:   filepath.Join("testdata", "subagent_session.jsonl"),
+		Source: "claude",
+	}
+
+	update, _, err := s.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if len(update.Subagents) != 1 {
+		t.Fatalf("Subagents: got %d, want 1", len(update.Subagents))
+	}
+	if update.Subagents[0].Slug != "child-agent-slug" {
+		t.Errorf("Subagent.Slug: got %q, want %q", update.Subagents[0].Slug, "child-agent-slug")
+	}
+}
+
 func TestParseLines_ProgressSelfFilteredBySlug(t *testing.T) {
 	// A non-agent progress entry whose slug matches the session slug should be
 	// filtered out (it's the session's own progress, not a subagent's).
@@ -389,6 +425,7 @@ func TestBuildSubagentStates_Fields(t *testing.T) {
 		"tu-1": {
 			id:              "tu-1",
 			parentToolUseID: "tu-parent",
+			slug:            "explore-agent",
 			activity:        session.ActivityWorking,
 			currentTool:     "Read",
 			firstTime:       now.Add(-time.Minute),
@@ -405,6 +442,9 @@ func TestBuildSubagentStates_Fields(t *testing.T) {
 	}
 	if s.ParentID != "tu-parent" {
 		t.Errorf("ParentID: got %q", s.ParentID)
+	}
+	if s.Slug != "explore-agent" {
+		t.Errorf("Slug: got %q, want %q", s.Slug, "explore-agent")
 	}
 	if s.Activity != session.ActivityWorking {
 		t.Errorf("Activity: got %q", s.Activity)

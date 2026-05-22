@@ -349,6 +349,7 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 	subagentStateReviewed := map[string]bool{
 		"ID":             true, // (*) identifier — cleared by RedactSessionID
 		"ParentID":       true, // (*) parent identifier — cleared by RedactSessionID
+		"Slug":           true, // not sensitive — user-visible session label
 		"Activity":       true, // not sensitive
 		"CurrentTool":    true, // not sensitive
 		"StartedAt":      true, // not sensitive

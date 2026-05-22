@@ -2293,6 +2293,236 @@ func TestRun_CompletionRetention_WithRemovalEvent(t *testing.T) {
 	}
 }
 
+// --- Subagent cross-session completion tests ---
+
+// TestPollOnce_SubagentCompletionMarksMatchingSession verifies that when a
+// parent session reports a completed subagent (via SubagentState with
+// ActivityTerminal and a slug), a separate active session with that same slug
+// is marked terminal immediately — not after the stale threshold.
+func TestPollOnce_SubagentCompletionMarksMatchingSession(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("claude"))
+
+	// Two sessions: a parent and a subagent (with its own independent session).
+	src.SetHandles([]source.SessionHandle{
+		{ID: "parent-1", Source: "claude", StartedAt: clk.Now()},
+		{ID: "subagent-1", Source: "claude", StartedAt: clk.Now()},
+	})
+
+	// Poll 1: both sessions discovered and active.
+	src.AddUpdate("parent-1", source.SourceUpdate{
+		SessionID: "parent-1",
+		Slug:      "orchestrator",
+		Activity:  session.ActivityWorking,
+		Subagents: []session.SubagentState{
+			{ID: "tu-1", Slug: "explore-task", Activity: session.ActivityWorking},
+		},
+	}, "c1")
+	src.AddUpdate("subagent-1", source.SourceUpdate{
+		SessionID: "subagent-1",
+		Slug:      "explore-task",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(5*time.Minute), // long stale — should NOT be needed
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	snap := m.Snapshot()
+	if len(snap) != 2 {
+		t.Fatalf("expected 2 sessions, got %d", len(snap))
+	}
+
+	// Poll 2: parent reports the subagent as completed (tool_result received).
+	// The subagent's own session has no new data — Parse returns zero update.
+	clk.Advance(5 * time.Second)
+	sink.events = nil
+
+	src.AddUpdate("parent-1", source.SourceUpdate{
+		SessionID: "parent-1",
+		Slug:      "orchestrator",
+		Activity:  session.ActivityWorking,
+		Subagents: []session.SubagentState{
+			{ID: "tu-1", Slug: "explore-task", Activity: session.ActivityTerminal},
+		},
+	}, "c2")
+	// No update for subagent-1 — it's gone quiet.
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	// The subagent session should now be terminal — NOT waiting 5 minutes.
+	snap = m.Snapshot()
+	byID := make(map[string]session.SessionState)
+	for i := 0; i < len(snap); i++ {
+		byID[snap[i].ID] = snap[i]
+	}
+
+	parent := byID["parent-1"]
+	if parent.Lifecycle != session.LifecycleActive {
+		t.Errorf("parent Lifecycle = %q, want active", parent.Lifecycle)
+	}
+
+	sub := byID["subagent-1"]
+	if sub.Lifecycle != session.LifecycleTerminal {
+		t.Errorf("subagent Lifecycle = %q, want terminal (should be marked by completion sweep)", sub.Lifecycle)
+	}
+	if sub.CompletedAt == nil {
+		t.Error("subagent CompletedAt should not be nil")
+	}
+
+	// Verify terminal lifecycle event was delivered for the subagent.
+	var terminalFound bool
+	for i := 0; i < len(sink.events); i++ {
+		ev := sink.events[i]
+		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
+			ev.Lifecycle.Type == session.EventTerminal &&
+			ev.Lifecycle.SessionID == "subagent-1" {
+			terminalFound = true
+			if ev.Lifecycle.Reason != "parent reported subagent completion" {
+				t.Errorf("terminal reason = %q", ev.Lifecycle.Reason)
+			}
+		}
+	}
+	if !terminalFound {
+		t.Error("no terminal lifecycle event delivered for completed subagent")
+	}
+}
+
+// TestPollOnce_SubagentCompletion_NoFalsePositives verifies that the
+// subagent completion sweep does NOT mark a session terminal just because
+// it shares a slug with a working (not completed) subagent.
+func TestPollOnce_SubagentCompletion_NoFalsePositives(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+
+	src.SetHandles([]source.SessionHandle{
+		{ID: "parent-1", Source: "test", StartedAt: clk.Now()},
+		{ID: "sub-1", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Parent reports subagent still working (not completed).
+	src.AddUpdate("parent-1", source.SourceUpdate{
+		SessionID: "parent-1",
+		Slug:      "parent-slug",
+		Activity:  session.ActivityWorking,
+		Subagents: []session.SubagentState{
+			{ID: "tu-1", Slug: "worker-slug", Activity: session.ActivityWorking},
+		},
+	}, "c1")
+	src.AddUpdate("sub-1", source.SourceUpdate{
+		SessionID: "sub-1",
+		Slug:      "worker-slug",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(5*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	if err := m.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	snap := m.Snapshot()
+	for i := 0; i < len(snap); i++ {
+		if snap[i].ID == "sub-1" && snap[i].Lifecycle != session.LifecycleActive {
+			t.Errorf("sub-1 should stay active when subagent is still working, got %q", snap[i].Lifecycle)
+		}
+	}
+}
+
+// TestPollOnce_SubagentCompletion_DoesNotAffectParent verifies that the
+// parent session is never marked terminal by the subagent sweep, even though
+// it hosts the terminal subagent state.
+func TestPollOnce_SubagentCompletion_DoesNotAffectParent(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+
+	src.SetHandles([]source.SessionHandle{
+		{ID: "parent", Source: "test", StartedAt: clk.Now()},
+		{ID: "child", Source: "test", StartedAt: clk.Now()},
+	})
+
+	// Both active.
+	src.AddUpdate("parent", source.SourceUpdate{
+		SessionID: "parent",
+		Slug:      "main-session",
+		Activity:  session.ActivityWorking,
+		Subagents: []session.SubagentState{
+			{ID: "tu-1", Slug: "child-slug", Activity: session.ActivityWorking},
+		},
+	}, "c1")
+	src.AddUpdate("child", source.SourceUpdate{
+		SessionID: "child",
+		Slug:      "child-slug",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(5*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	// Parent reports subagent done.
+	clk.Advance(time.Second)
+	src.AddUpdate("parent", source.SourceUpdate{
+		SessionID: "parent",
+		Slug:      "main-session",
+		Activity:  session.ActivityWorking,
+		Subagents: []session.SubagentState{
+			{ID: "tu-1", Slug: "child-slug", Activity: session.ActivityTerminal},
+		},
+	}, "c2")
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	snap := m.Snapshot()
+	byID := make(map[string]session.SessionState)
+	for i := 0; i < len(snap); i++ {
+		byID[snap[i].ID] = snap[i]
+	}
+
+	if byID["parent"].Lifecycle != session.LifecycleActive {
+		t.Errorf("parent should stay active, got %q", byID["parent"].Lifecycle)
+	}
+	if byID["child"].Lifecycle != session.LifecycleTerminal {
+		t.Errorf("child should be terminal, got %q", byID["child"].Lifecycle)
+	}
+}
+
 // TestRun_Race exercises concurrent Run + Snapshot under the race detector.
 func TestRun_Race(t *testing.T) {
 	t.Parallel()

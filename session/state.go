@@ -36,6 +36,7 @@ func (a *Activity) UnmarshalJSON(b []byte) error {
 type SubagentState struct {
 	ID             string    `json:"id"`
 	ParentID       string    `json:"parentId,omitempty"`
+	Slug           string    `json:"slug,omitempty"`
 	Activity       Activity  `json:"activity"`
 	CurrentTool    string    `json:"currentTool,omitempty"`
 	StartedAt      time.Time `json:"startedAt"`

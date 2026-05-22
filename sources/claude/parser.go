@@ -66,6 +66,7 @@ type progressData struct {
 type subagentResult struct {
 	id              string
 	parentToolUseID string
+	slug            string
 	model           string
 	contextTokens   int
 	outputTokens    int
@@ -254,12 +255,18 @@ func parseProgressRecord(rec *jsonlRecord, line []byte, r *parseResult) {
 		sub = &subagentResult{
 			id:              rec.ToolUseID,
 			parentToolUseID: rec.ParentToolUseID,
+			slug:            rec.Slug,
 			activity:        session.ActivityWorking,
 		}
 		r.subagents[rec.ToolUseID] = sub
 		if rec.ParentToolUseID != "" {
 			r.parentMap[rec.ParentToolUseID] = rec.ToolUseID
 		}
+	}
+
+	// Update slug if a later progress record provides one.
+	if rec.Slug != "" && sub.slug == "" {
+		sub.slug = rec.Slug
 	}
 
 	if rec.Timestamp != "" {
@@ -379,6 +386,7 @@ func buildSubagentStates(subs map[string]*subagentResult) []session.SubagentStat
 		out = append(out, session.SubagentState{
 			ID:             sub.id,
 			ParentID:       sub.parentToolUseID,
+			Slug:           sub.slug,
 			Activity:       sub.activity,
 			CurrentTool:    sub.currentTool,
 			StartedAt:      sub.firstTime,
