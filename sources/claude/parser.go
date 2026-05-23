@@ -71,11 +71,13 @@ type subagentResult struct {
 	contextTokens   int
 	outputTokens    int
 	toolCalls       int
+	msgCount        int
 	currentTool     string
 	activity        session.Activity
 	firstTime       time.Time
 	lastTime        time.Time
 	completed       bool
+	completedAt     time.Time
 }
 
 // parseResult accumulates state across a batch of JSONL lines.
@@ -175,7 +177,7 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 				r.msgDelta++
 				r.activity = session.ActivityWorking
 				r.hasData = true
-				checkSubagentCompletion(rec.Message.Content, &r)
+				checkSubagentCompletion(rec.Message.Content, &r, r.lastActivityAt)
 			}
 
 		case "assistant":
@@ -292,6 +294,7 @@ func parseProgressRecord(rec *jsonlRecord, line []byte, r *parseResult) {
 
 	switch pd.Message.Type {
 	case "assistant":
+		sub.msgCount++
 		if pd.Message.Message != nil {
 			parseSubagentAssistantMessage(pd.Message.Message, sub)
 		}
@@ -299,6 +302,7 @@ func parseProgressRecord(rec *jsonlRecord, line []byte, r *parseResult) {
 			sub.activity = session.ActivityWaiting
 		}
 	case "user":
+		sub.msgCount++
 		sub.activity = session.ActivityWaiting
 	}
 }
@@ -336,8 +340,8 @@ func parseSubagentAssistantMessage(raw json.RawMessage, sub *subagentResult) {
 // checkSubagentCompletion scans a user message's content blocks for
 // tool_result entries whose tool_use_id matches a known subagent's
 // parentToolUseID (or a cross-batch entry from r.parentMap), marking
-// that subagent as completed.
-func checkSubagentCompletion(blocks []contentBlock, r *parseResult) {
+// that subagent as completed. at is the timestamp of the user message.
+func checkSubagentCompletion(blocks []contentBlock, r *parseResult, at time.Time) {
 	// Build lookup: parentToolUseID -> subagent toolUseID
 	parentToSub := make(map[string]string, len(r.subagents)+len(r.parentMap))
 	for id, sub := range r.subagents {
@@ -367,6 +371,7 @@ func checkSubagentCompletion(blocks []contentBlock, r *parseResult) {
 		if sub, exists := r.subagents[subID]; exists {
 			sub.completed = true
 			sub.activity = session.ActivityTerminal
+			sub.completedAt = at
 		} else {
 			// Cross-batch: create a minimal entry to signal completion.
 			r.subagents[subID] = &subagentResult{
@@ -374,6 +379,7 @@ func checkSubagentCompletion(blocks []contentBlock, r *parseResult) {
 				parentToolUseID: block.ToolUseID,
 				completed:       true,
 				activity:        session.ActivityTerminal,
+				completedAt:     at,
 			}
 		}
 	}
@@ -395,6 +401,12 @@ func buildSubagentStates(subs map[string]*subagentResult) []session.SubagentStat
 			CurrentTool:    sub.currentTool,
 			StartedAt:      sub.firstTime,
 			LastActivityAt: sub.lastTime,
+			Model:          sub.model,
+			ContextTokens:  sub.contextTokens,
+			OutputTokens:   sub.outputTokens,
+			MessageCount:   sub.msgCount,
+			ToolCallCount:  sub.toolCalls,
+			CompletedAt:    sub.completedAt,
 		})
 	}
 	return out

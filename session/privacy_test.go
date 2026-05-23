@@ -41,6 +41,12 @@ func fullState() session.SessionState {
 				CurrentTool:    "Read",
 				StartedAt:      now,
 				LastActivityAt: now,
+				Model:          "claude-sonnet-4-6",
+				ContextTokens:  500,
+				OutputTokens:   50,
+				MessageCount:   3,
+				ToolCallCount:  2,
+				CompletedAt:    now.Add(30 * time.Minute),
 			},
 		},
 	}
@@ -112,6 +118,10 @@ func TestPolicy_Apply_RedactModel(t *testing.T) {
 	}
 	if got.WorkingDir != s.WorkingDir {
 		t.Errorf("WorkingDir should not be redacted: got %q", got.WorkingDir)
+	}
+	// Subagent model should also be redacted.
+	if len(got.Subagents) > 0 && got.Subagents[0].Model != "" {
+		t.Errorf("Subagent.Model: expected empty after RedactModel, got %q", got.Subagents[0].Model)
 	}
 }
 
@@ -197,6 +207,9 @@ func TestPolicy_Apply_FullRedaction(t *testing.T) {
 		}
 		if sub.ParentID != "" {
 			t.Errorf("Subagents[%d].ParentID not redacted: %q", i, sub.ParentID)
+		}
+		if sub.Model != "" {
+			t.Errorf("Subagents[%d].Model not redacted: %q", i, sub.Model)
 		}
 	}
 
@@ -355,6 +368,12 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 		"CurrentTool":    true, // not sensitive
 		"StartedAt":      true, // not sensitive
 		"LastActivityAt": true, // not sensitive
+		"Model":          true, // (*) model name — RedactModel (same sensitivity as SessionState.Model)
+		"ContextTokens":  true, // not sensitive
+		"OutputTokens":   true, // not sensitive
+		"MessageCount":   true, // not sensitive
+		"ToolCallCount":  true, // not sensitive
+		"CompletedAt":    true, // not sensitive
 	}
 
 	checkStruct := func(t *testing.T, typ reflect.Type, reviewed map[string]bool) {

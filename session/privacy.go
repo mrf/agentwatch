@@ -49,6 +49,9 @@ func (p Policy) Apply(s SessionState) SessionState {
 	}
 	if p.RedactModel {
 		out.Model = ""
+		for i := range out.Subagents {
+			out.Subagents[i].Model = ""
+		}
 	}
 	if p.RedactSessionID {
 		out.ID = ""
