@@ -480,11 +480,11 @@ func seedFileDB(t *testing.T, seed func(db *sql.DB)) string {
 		t.Fatal(err)
 	}
 	if _, err := db.Exec(testSchema); err != nil {
-		db.Close()
+		_ = db.Close()
 		t.Fatal(err)
 	}
 	seed(db)
-	db.Close()
+	_ = db.Close()
 	return dbPath
 }
 
@@ -495,7 +495,7 @@ func addDataToDB(t *testing.T, dbPath string, fn func(db *sql.DB)) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	fn(db)
 }
 
