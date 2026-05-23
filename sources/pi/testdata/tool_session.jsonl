@@ -1,0 +1,5 @@
+{"type":"session","id":"efgh5678","version":3,"timestamp":"2024-01-15T11:00:00Z","workingDir":"/home/user/myapp"}
+{"type":"message","id":"00000001","parentId":"efgh5678","timestamp":"2024-01-15T11:00:05Z","message":{"role":"user","content":"Run the tests","timestamp":"2024-01-15T11:00:05Z"}}
+{"type":"message","id":"00000002","parentId":"00000001","timestamp":"2024-01-15T11:00:10Z","message":{"role":"assistant","content":"Running tests now...","provider":"anthropic","model":"claude-opus-4-6","usage":{"input":200,"output":30,"cacheRead":10,"cacheWrite":5},"stopReason":"tool_use","timestamp":"2024-01-15T11:00:10Z"}}
+{"type":"message","id":"00000003","parentId":"00000002","timestamp":"2024-01-15T11:00:15Z","message":{"role":"toolResult","toolCallId":"call_abc123","toolName":"bash","content":"Tests passed: 42/42","isError":false,"timestamp":"2024-01-15T11:00:15Z"}}
+{"type":"message","id":"00000004","parentId":"00000002","timestamp":"2024-01-15T11:00:20Z","message":{"role":"bashExecution","command":"go test ./...","output":"ok github.com/user/myapp\n","exitCode":0}}
