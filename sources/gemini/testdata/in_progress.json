@@ -1,9 +1,0 @@
-{
-  "conversationHistory": [
-    {
-      "role": "user",
-      "parts": [{"text": "run the tests"}]
-    }
-  ],
-  "model": "gemini-2.0-flash"
-}

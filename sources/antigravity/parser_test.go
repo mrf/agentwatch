@@ -1,4 +1,4 @@
-package gemini
+package antigravity
 
 import (
 	"context"
@@ -35,17 +35,17 @@ func fixtureData(t *testing.T, name string) []byte {
 	return data
 }
 
-// --- parseCheckpoint unit tests ---
+// --- parseSession unit tests ---
 
-func TestParseCheckpoint_SimpleConversation(t *testing.T) {
+func TestParseSession_SimpleConversation(t *testing.T) {
 	data := fixtureData(t, "simple.json")
-	r, err := parseCheckpoint(data)
+	r, err := parseSession(data)
 	if err != nil {
-		t.Fatalf("parseCheckpoint: %v", err)
+		t.Fatalf("parseSession: %v", err)
 	}
 
-	if r.model != "gemini-2.0-flash" {
-		t.Errorf("model: got %q, want %q", r.model, "gemini-2.0-flash")
+	if r.model != "gemini-2.5-pro" {
+		t.Errorf("model: got %q, want %q", r.model, "gemini-2.5-pro")
 	}
 	if r.totalUserMsgs != 1 {
 		t.Errorf("totalUserMsgs: got %d, want 1", r.totalUserMsgs)
@@ -68,15 +68,15 @@ func TestParseCheckpoint_SimpleConversation(t *testing.T) {
 	}
 }
 
-func TestParseCheckpoint_ToolSession(t *testing.T) {
+func TestParseSession_ToolSession(t *testing.T) {
 	data := fixtureData(t, "tool_session.json")
-	r, err := parseCheckpoint(data)
+	r, err := parseSession(data)
 	if err != nil {
-		t.Fatalf("parseCheckpoint: %v", err)
+		t.Fatalf("parseSession: %v", err)
 	}
 
-	if r.model != "gemini-2.0-flash-exp" {
-		t.Errorf("model: got %q, want %q", r.model, "gemini-2.0-flash-exp")
+	if r.model != "gemini-2.5-flash" {
+		t.Errorf("model: got %q, want %q", r.model, "gemini-2.5-flash")
 	}
 	// user text, model w/ tool, user functionResponse, model text
 	if r.totalUserMsgs != 1 {
@@ -104,12 +104,12 @@ func TestParseCheckpoint_ToolSession(t *testing.T) {
 	}
 }
 
-func TestParseCheckpoint_InProgressUserTurn(t *testing.T) {
+func TestParseSession_InProgressUserTurn(t *testing.T) {
 	// A conversation ending with a user text turn means the model is processing.
 	data := fixtureData(t, "in_progress.json")
-	r, err := parseCheckpoint(data)
+	r, err := parseSession(data)
 	if err != nil {
-		t.Fatalf("parseCheckpoint: %v", err)
+		t.Fatalf("parseSession: %v", err)
 	}
 
 	if r.totalUserMsgs != 1 {
@@ -123,10 +123,10 @@ func TestParseCheckpoint_InProgressUserTurn(t *testing.T) {
 	}
 }
 
-func TestParseCheckpoint_Empty(t *testing.T) {
-	r, err := parseCheckpoint([]byte(`{"conversationHistory":[], "model": "gemini-2.0-flash"}`))
+func TestParseSession_Empty(t *testing.T) {
+	r, err := parseSession([]byte(`{"messages":[], "model": "gemini-2.5-pro"}`))
 	if err != nil {
-		t.Fatalf("parseCheckpoint: %v", err)
+		t.Fatalf("parseSession: %v", err)
 	}
 	if r.totalUserMsgs != 0 || r.totalModelMsgs != 0 {
 		t.Errorf("expected zero counts for empty history, got user=%d model=%d", r.totalUserMsgs, r.totalModelMsgs)
@@ -136,26 +136,26 @@ func TestParseCheckpoint_Empty(t *testing.T) {
 	}
 }
 
-func TestParseCheckpoint_MalformedJSON(t *testing.T) {
-	_, err := parseCheckpoint([]byte(`not valid json`))
+func TestParseSession_MalformedJSON(t *testing.T) {
+	_, err := parseSession([]byte(`not valid json`))
 	if err == nil {
 		t.Error("expected error for malformed JSON, got nil")
 	}
 }
 
-func TestParseCheckpoint_FunctionResponseNotCountedAsUserMsg(t *testing.T) {
+func TestParseSession_FunctionResponseNotCountedAsUserMsg(t *testing.T) {
 	// A user turn that only contains a functionResponse is not a user message.
 	data := []byte(`{
-		"conversationHistory": [
+		"messages": [
 			{"role": "user", "parts": [{"text": "do something"}]},
 			{"role": "model", "parts": [{"functionCall": {"name": "read_file"}}]},
 			{"role": "user", "parts": [{"functionResponse": {"name": "read_file"}}]}
 		],
-		"model": "gemini-2.0-flash"
+		"model": "gemini-2.5-pro"
 	}`)
-	r, err := parseCheckpoint(data)
+	r, err := parseSession(data)
 	if err != nil {
-		t.Fatalf("parseCheckpoint: %v", err)
+		t.Fatalf("parseSession: %v", err)
 	}
 	// Only the first user turn has text — the function response turn does not count.
 	if r.totalUserMsgs != 1 {
@@ -167,21 +167,21 @@ func TestParseCheckpoint_FunctionResponseNotCountedAsUserMsg(t *testing.T) {
 	}
 }
 
-func TestParseCheckpoint_ModelEndingWithToolCall(t *testing.T) {
+func TestParseSession_ModelEndingWithToolCall(t *testing.T) {
 	// If the last model turn ends with a functionCall, the model is still working.
 	data := []byte(`{
-		"conversationHistory": [
+		"messages": [
 			{"role": "user", "parts": [{"text": "do something"}]},
 			{"role": "model", "parts": [
 				{"text": "I will read the file first."},
 				{"functionCall": {"name": "read_file"}}
 			]}
 		],
-		"model": "gemini-2.0-flash"
+		"model": "gemini-2.5-pro"
 	}`)
-	r, err := parseCheckpoint(data)
+	r, err := parseSession(data)
 	if err != nil {
-		t.Fatalf("parseCheckpoint: %v", err)
+		t.Fatalf("parseSession: %v", err)
 	}
 	if r.activity != session.ActivityWorking {
 		t.Errorf("activity: got %q, want ActivityWorking (last part is tool call)", r.activity)
@@ -193,21 +193,21 @@ func TestParseCheckpoint_ModelEndingWithToolCall(t *testing.T) {
 
 // --- Parse (integration) tests ---
 
-func newTestGeminiSource(t *testing.T) *GeminiSource {
+func newTestAntigravitySource(t *testing.T) *AntigravitySource {
 	t.Helper()
 	s, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return s.(*GeminiSource)
+	return s.(*AntigravitySource)
 }
 
 func TestParse_SimpleSession(t *testing.T) {
-	s := newTestGeminiSource(t)
+	s := newTestAntigravitySource(t)
 	h := source.SessionHandle{
-		ID:     "abc123hash",
+		ID:     "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Path:   filepath.Join("testdata", "simple.json"),
-		Source: "gemini",
+		Source: "antigravity",
 	}
 
 	update, cursor, err := s.Parse(context.Background(), h, "")
@@ -217,11 +217,11 @@ func TestParse_SimpleSession(t *testing.T) {
 	if cursor == "" {
 		t.Error("cursor must not be empty after parsing data")
 	}
-	if update.SessionID != "abc123hash" {
-		t.Errorf("SessionID: got %q, want %q", update.SessionID, "abc123hash")
+	if update.SessionID != "a1b2c3d4-e5f6-7890-abcd-ef1234567890" {
+		t.Errorf("SessionID: got %q, want %q", update.SessionID, "a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 	}
-	if update.Model != "gemini-2.0-flash" {
-		t.Errorf("Model: got %q, want %q", update.Model, "gemini-2.0-flash")
+	if update.Model != "gemini-2.5-pro" {
+		t.Errorf("Model: got %q, want %q", update.Model, "gemini-2.5-pro")
 	}
 	if update.Activity != session.ActivityWaiting {
 		t.Errorf("Activity: got %q, want %q", update.Activity, session.ActivityWaiting)
@@ -240,11 +240,11 @@ func TestParse_SimpleSession(t *testing.T) {
 
 func TestParse_NoChangeNoUpdate(t *testing.T) {
 	// Parsing the same file twice without modification returns empty update with same cursor.
-	s := newTestGeminiSource(t)
+	s := newTestAntigravitySource(t)
 	h := source.SessionHandle{
-		ID:     "abc123",
+		ID:     "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Path:   filepath.Join("testdata", "simple.json"),
-		Source: "gemini",
+		Source: "antigravity",
 	}
 
 	_, c1, err := s.Parse(context.Background(), h, "")
@@ -268,21 +268,22 @@ func TestParse_FileRewriteUpdatesState(t *testing.T) {
 	// Write a file, parse it, then rewrite it with more content and parse again.
 	// The second parse should return a delta for the new turns only.
 	dir := t.TempDir()
-	path := filepath.Join(dir, "checkpoint.json")
+	path := filepath.Join(dir, "019dc11d-218b-7ec1-a103-aeb16330d302.json")
 
 	initial := `{
-		"conversationHistory": [
+		"sessionId": "019dc11d-218b-7ec1-a103-aeb16330d302",
+		"messages": [
 			{"role": "user", "parts": [{"text": "hello"}]},
-			{"role": "model", "parts": [{"text": "hi!"}], "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15}}
+			{"role": "model", "parts": [{"text": "hi!"}], "usageMetadata": {"inputTokenCount": 10, "outputTokenCount": 5, "totalTokenCount": 15}}
 		],
-		"model": "gemini-2.0-flash"
+		"model": "gemini-2.5-pro"
 	}`
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial: %v", err)
 	}
 
-	s := newTestGeminiSource(t)
-	h := source.SessionHandle{ID: "sess1", Path: path, Source: "gemini"}
+	s := newTestAntigravitySource(t)
+	h := source.SessionHandle{ID: "sess1", Path: path, Source: "antigravity"}
 
 	u1, c1, err := s.Parse(context.Background(), h, "")
 	if err != nil {
@@ -294,13 +295,14 @@ func TestParse_FileRewriteUpdatesState(t *testing.T) {
 
 	// Rewrite the file and advance its mtime by 1 second to guarantee detection.
 	updated := `{
-		"conversationHistory": [
+		"sessionId": "019dc11d-218b-7ec1-a103-aeb16330d302",
+		"messages": [
 			{"role": "user", "parts": [{"text": "hello"}]},
-			{"role": "model", "parts": [{"text": "hi!"}], "usageMetadata": {"promptTokenCount": 10, "candidatesTokenCount": 5, "totalTokenCount": 15}},
+			{"role": "model", "parts": [{"text": "hi!"}], "usageMetadata": {"inputTokenCount": 10, "outputTokenCount": 5, "totalTokenCount": 15}},
 			{"role": "user", "parts": [{"text": "what can you do?"}]},
-			{"role": "model", "parts": [{"text": "I can help with many tasks."}], "usageMetadata": {"promptTokenCount": 30, "candidatesTokenCount": 15, "totalTokenCount": 45}}
+			{"role": "model", "parts": [{"text": "I can help with many tasks."}], "usageMetadata": {"inputTokenCount": 30, "outputTokenCount": 15, "totalTokenCount": 45}}
 		],
-		"model": "gemini-2.0-flash"
+		"model": "gemini-2.5-pro"
 	}`
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		t.Fatalf("write updated: %v", err)
@@ -332,21 +334,22 @@ func TestParse_FileRewriteUpdatesState(t *testing.T) {
 func TestParse_FileRewrite_ToolCallDelta(t *testing.T) {
 	// Verify tool call deltas are computed correctly across rewrites.
 	dir := t.TempDir()
-	path := filepath.Join(dir, "checkpoint.json")
+	path := filepath.Join(dir, "019dc11d-218b-7ec1-a103-aeb16330d302.json")
 
 	initial := `{
-		"conversationHistory": [
+		"sessionId": "019dc11d-218b-7ec1-a103-aeb16330d302",
+		"messages": [
 			{"role": "user", "parts": [{"text": "list files"}]},
 			{"role": "model", "parts": [{"functionCall": {"name": "list_dir"}}]}
 		],
-		"model": "gemini-2.0-flash"
+		"model": "gemini-2.5-pro"
 	}`
 	if err := os.WriteFile(path, []byte(initial), 0o644); err != nil {
 		t.Fatalf("write initial: %v", err)
 	}
 
-	s := newTestGeminiSource(t)
-	h := source.SessionHandle{ID: "sess2", Path: path, Source: "gemini"}
+	s := newTestAntigravitySource(t)
+	h := source.SessionHandle{ID: "sess2", Path: path, Source: "antigravity"}
 
 	u1, c1, err := s.Parse(context.Background(), h, "")
 	if err != nil {
@@ -357,13 +360,14 @@ func TestParse_FileRewrite_ToolCallDelta(t *testing.T) {
 	}
 
 	updated := `{
-		"conversationHistory": [
+		"sessionId": "019dc11d-218b-7ec1-a103-aeb16330d302",
+		"messages": [
 			{"role": "user", "parts": [{"text": "list files"}]},
 			{"role": "model", "parts": [{"functionCall": {"name": "list_dir"}}]},
 			{"role": "user", "parts": [{"functionResponse": {"name": "list_dir"}}]},
 			{"role": "model", "parts": [{"functionCall": {"name": "read_file"}}]}
 		],
-		"model": "gemini-2.0-flash"
+		"model": "gemini-2.5-pro"
 	}`
 	if err := os.WriteFile(path, []byte(updated), 0o644); err != nil {
 		t.Fatalf("write updated: %v", err)
@@ -387,7 +391,7 @@ func TestParse_ContextCancelled(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	s := newTestGeminiSource(t)
+	s := newTestAntigravitySource(t)
 	h := source.SessionHandle{
 		ID:   "any",
 		Path: filepath.Join("testdata", "simple.json"),
@@ -400,12 +404,12 @@ func TestParse_ContextCancelled(t *testing.T) {
 
 func TestParse_WorkingDirFromHandle(t *testing.T) {
 	// WorkingDir set on the handle is propagated to the update.
-	s := newTestGeminiSource(t)
+	s := newTestAntigravitySource(t)
 	h := source.SessionHandle{
-		ID:         "abc",
+		ID:         "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		Path:       filepath.Join("testdata", "simple.json"),
 		WorkingDir: "/home/user/myproject",
-		Source:     "gemini",
+		Source:     "antigravity",
 	}
 	update, _, err := s.Parse(context.Background(), h, "")
 	if err != nil {
@@ -419,28 +423,24 @@ func TestParse_WorkingDirFromHandle(t *testing.T) {
 // --- Discover tests ---
 
 func TestDiscover_FindsSessions(t *testing.T) {
-	// Create a directory tree mirroring Gemini CLI's ~/.gemini/tmp/ layout:
-	// root/<hash1>/checkpoint.json
-	// root/<hash2>/checkpoint.json
-	// root/<hash3>/notes.txt  (no checkpoint.json — should be ignored)
+	// Create a directory tree mirroring Antigravity CLI's ~/.antigravitycli/ layout:
+	// root/<uuid1>.json
+	// root/<uuid2>.json
+	// root/notes.txt  (not a .json — should be ignored)
 	root := t.TempDir()
 
-	for _, hash := range []string{"aabbccdd", "11223344"} {
-		dir := filepath.Join(root, hash)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			t.Fatalf("mkdir %s: %v", dir, err)
-		}
-		content := `{"conversationHistory":[], "model":"gemini-2.0-flash"}`
-		if err := os.WriteFile(filepath.Join(dir, "checkpoint.json"), []byte(content), 0o644); err != nil {
-			t.Fatalf("write checkpoint: %v", err)
+	for _, uuid := range []string{
+		"a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+		"b2c3d4e5-f6a7-8901-bcde-f12345678901",
+	} {
+		content := `{"messages":[], "model":"gemini-2.5-pro"}`
+		if err := os.WriteFile(filepath.Join(root, uuid+".json"), []byte(content), 0o644); err != nil {
+			t.Fatalf("write session: %v", err)
 		}
 	}
 
-	// Third session dir without a checkpoint.json — should not appear.
-	if err := os.MkdirAll(filepath.Join(root, "deadbeef"), 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(root, "deadbeef", "notes.txt"), []byte(""), 0o644); err != nil {
+	// Non-JSON file — should not appear.
+	if err := os.WriteFile(filepath.Join(root, "notes.txt"), []byte(""), 0o644); err != nil {
 		t.Fatalf("write notes: %v", err)
 	}
 
@@ -456,15 +456,15 @@ func TestDiscover_FindsSessions(t *testing.T) {
 		t.Errorf("got %d handles, want 2", len(handles))
 	}
 	for i := 0; i < len(handles); i++ {
-		if handles[i].Source != "gemini" {
-			t.Errorf("handle[%d].Source: got %q, want %q", i, handles[i].Source, "gemini")
+		if handles[i].Source != "antigravity" {
+			t.Errorf("handle[%d].Source: got %q, want %q", i, handles[i].Source, "antigravity")
 		}
 		if handles[i].ID == "" {
 			t.Errorf("handle[%d].ID is empty", i)
 		}
-		// Path should point to checkpoint.json
-		if filepath.Base(handles[i].Path) != "checkpoint.json" {
-			t.Errorf("handle[%d].Path: expected checkpoint.json, got %q", i, handles[i].Path)
+		// Path should point to a .json file
+		if !filepath.IsAbs(handles[i].Path) || filepath.Ext(handles[i].Path) != ".json" {
+			t.Errorf("handle[%d].Path: expected *.json, got %q", i, handles[i].Path)
 		}
 	}
 }
@@ -484,7 +484,7 @@ func TestDiscover_EmptyRoot(t *testing.T) {
 }
 
 func TestDiscover_NonExistentRoot(t *testing.T) {
-	s, err := New(WithRoot("/nonexistent/gemini/path"))
+	s, err := New(WithRoot("/nonexistent/antigravity/path"))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -499,11 +499,8 @@ func TestDiscover_NonExistentRoot(t *testing.T) {
 
 func TestDiscover_ContextCancelled(t *testing.T) {
 	dir := t.TempDir()
-	sessDir := filepath.Join(dir, "aabbccdd")
-	if err := os.MkdirAll(sessDir, 0o755); err != nil {
-		t.Fatalf("mkdir: %v", err)
-	}
-	if err := os.WriteFile(filepath.Join(sessDir, "checkpoint.json"), []byte(`{}`), 0o644); err != nil {
+	content := `{"messages":[], "model":"gemini-2.5-pro"}`
+	if err := os.WriteFile(filepath.Join(dir, "a1b2c3d4-e5f6-7890-abcd-ef1234567890.json"), []byte(content), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
 
@@ -525,8 +522,8 @@ func TestRegister(t *testing.T) {
 	if err := Register(r); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	if _, ok := r.Get("gemini"); !ok {
-		t.Error("gemini not found in registry after Register")
+	if _, ok := r.Get("antigravity"); !ok {
+		t.Error("antigravity not found in registry after Register")
 	}
 	// Double-register should fail.
 	if err := Register(r); err == nil {

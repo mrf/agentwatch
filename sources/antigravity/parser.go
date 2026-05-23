@@ -1,4 +1,4 @@
-package gemini
+package antigravity
 
 import (
 	"encoding/json"
@@ -7,21 +7,29 @@ import (
 	"github.com/mrf/agentwatch/source"
 )
 
-// checkpoint is the top-level structure of a Gemini CLI checkpoint.json file.
-// Gemini rewrites this file in full on every update; it is not append-only.
-type checkpoint struct {
-	ConversationHistory []contentItem `json:"conversationHistory"`
-	Model               string        `json:"model"`
+// sessionFile is the top-level structure of an Antigravity CLI session file.
+// Antigravity rewrites this file in full on every update; it is not append-only.
+//
+// The schema is inferred from Antigravity 2.0 (launched 2026-05-19) which
+// evolves from the Gemini CLI checkpoint format. Field names follow observed
+// patterns: "messages" replaces "conversationHistory", token count fields
+// use "inputTokenCount"/"outputTokenCount" instead of the Gemini-era
+// "promptTokenCount"/"candidatesTokenCount".
+type sessionFile struct {
+	SessionID string    `json:"sessionId"`
+	Messages  []message `json:"messages"`
+	Model     string    `json:"model"`
+	Status    string    `json:"status"`
 }
 
-// contentItem is one turn in the conversation (a "user" or "model" message).
-type contentItem struct {
-	Role          string        `json:"role"`
-	Parts         []part        `json:"parts"`
+// message is one turn in the conversation (a "user" or "model" message).
+type message struct {
+	Role          string         `json:"role"`
+	Parts         []part         `json:"parts"`
 	UsageMetadata *usageMetadata `json:"usageMetadata,omitempty"`
 }
 
-// part is one element of a content item's parts array.
+// part is one element of a message's parts array.
 // Only one of Text, FunctionCall, or FunctionResponse is populated.
 type part struct {
 	Text             string            `json:"text,omitempty"`
@@ -38,12 +46,12 @@ type functionResponse struct {
 }
 
 type usageMetadata struct {
-	PromptTokenCount     int `json:"promptTokenCount"`
-	CandidatesTokenCount int `json:"candidatesTokenCount"`
-	TotalTokenCount      int `json:"totalTokenCount"`
+	InputTokenCount  int `json:"inputTokenCount"`
+	OutputTokenCount int `json:"outputTokenCount"`
+	TotalTokenCount  int `json:"totalTokenCount"`
 }
 
-// parseResult holds extracted monitoring state from a parsed checkpoint.
+// parseResult holds extracted monitoring state from a parsed session file.
 type parseResult struct {
 	model string
 
@@ -65,29 +73,29 @@ type parseResult struct {
 	activity session.Activity
 }
 
-// parseCheckpoint parses a checkpoint.json payload and returns a parseResult.
-// It never returns an error for recoverable format issues (unknown fields,
-// missing optional parts) — only for unparseable JSON.
-func parseCheckpoint(data []byte) (parseResult, error) {
-	var cp checkpoint
-	if err := json.Unmarshal(data, &cp); err != nil {
+// parseSession parses an Antigravity CLI session JSON file and returns a
+// parseResult. It never returns an error for recoverable format issues
+// (unknown fields, missing optional parts) — only for unparseable JSON.
+func parseSession(data []byte) (parseResult, error) {
+	var sf sessionFile
+	if err := json.Unmarshal(data, &sf); err != nil {
 		return parseResult{}, err
 	}
 
 	r := parseResult{
-		model:    cp.Model,
+		model:    sf.Model,
 		activity: session.ActivityIdle,
 	}
 
-	for i := 0; i < len(cp.ConversationHistory); i++ {
-		item := cp.ConversationHistory[i]
-		switch item.Role {
+	for i := 0; i < len(sf.Messages); i++ {
+		msg := sf.Messages[i]
+		switch msg.Role {
 		case "user":
-			if isTextTurn(item) {
+			if isTextTurn(msg) {
 				r.totalUserMsgs++
 			}
 			// functionResponse turns indicate the model is processing a tool result.
-			if hasFunctionResponse(item) {
+			if hasFunctionResponse(msg) {
 				r.activity = session.ActivityWorking
 			}
 
@@ -95,22 +103,22 @@ func parseCheckpoint(data []byte) (parseResult, error) {
 			r.totalModelMsgs++
 
 			// Count function calls and record the latest tool name.
-			for j := 0; j < len(item.Parts); j++ {
-				if item.Parts[j].FunctionCall != nil {
+			for j := 0; j < len(msg.Parts); j++ {
+				if msg.Parts[j].FunctionCall != nil {
 					r.totalToolCalls++
-					r.currentTool = item.Parts[j].FunctionCall.Name
+					r.currentTool = msg.Parts[j].FunctionCall.Name
 				}
 			}
 
 			// Capture token counts from the last model turn that carries them.
-			if item.UsageMetadata != nil {
-				r.contextTokens = item.UsageMetadata.PromptTokenCount
-				r.outputTokens = item.UsageMetadata.CandidatesTokenCount
+			if msg.UsageMetadata != nil {
+				r.contextTokens = msg.UsageMetadata.InputTokenCount
+				r.outputTokens = msg.UsageMetadata.OutputTokenCount
 			}
 
 			// Activity after a model turn: waiting if it ended with text,
 			// working if it ended with a tool call.
-			if lastPartIsFunctionCall(item) {
+			if lastPartIsFunctionCall(msg) {
 				r.activity = session.ActivityWorking
 			} else {
 				r.activity = session.ActivityWaiting
@@ -119,8 +127,8 @@ func parseCheckpoint(data []byte) (parseResult, error) {
 	}
 
 	// A final user text turn means the model is actively processing.
-	if len(cp.ConversationHistory) > 0 {
-		last := cp.ConversationHistory[len(cp.ConversationHistory)-1]
+	if len(sf.Messages) > 0 {
+		last := sf.Messages[len(sf.Messages)-1]
 		if last.Role == "user" && isTextTurn(last) {
 			r.activity = session.ActivityWorking
 		}
@@ -145,30 +153,30 @@ func buildUpdate(r parseResult, id, workingDir string, msgDelta, toolDelta int) 
 	}
 }
 
-// isTextTurn reports whether the item has at least one non-empty text part.
-func isTextTurn(item contentItem) bool {
-	for i := 0; i < len(item.Parts); i++ {
-		if item.Parts[i].Text != "" {
+// isTextTurn reports whether the message has at least one non-empty text part.
+func isTextTurn(msg message) bool {
+	for i := 0; i < len(msg.Parts); i++ {
+		if msg.Parts[i].Text != "" {
 			return true
 		}
 	}
 	return false
 }
 
-// hasFunctionResponse reports whether the item contains a functionResponse part.
-func hasFunctionResponse(item contentItem) bool {
-	for i := 0; i < len(item.Parts); i++ {
-		if item.Parts[i].FunctionResponse != nil {
+// hasFunctionResponse reports whether the message contains a functionResponse part.
+func hasFunctionResponse(msg message) bool {
+	for i := 0; i < len(msg.Parts); i++ {
+		if msg.Parts[i].FunctionResponse != nil {
 			return true
 		}
 	}
 	return false
 }
 
-// lastPartIsFunctionCall reports whether the last part in item is a functionCall.
-func lastPartIsFunctionCall(item contentItem) bool {
-	if len(item.Parts) == 0 {
+// lastPartIsFunctionCall reports whether the last part in msg is a functionCall.
+func lastPartIsFunctionCall(msg message) bool {
+	if len(msg.Parts) == 0 {
 		return false
 	}
-	return item.Parts[len(item.Parts)-1].FunctionCall != nil
+	return msg.Parts[len(msg.Parts)-1].FunctionCall != nil
 }
