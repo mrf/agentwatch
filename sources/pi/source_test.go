@@ -190,10 +190,10 @@ func TestParseIncrementalSessionID(t *testing.T) {
 		t.Fatalf("open file for append: %v", err)
 	}
 	if _, err := f.WriteString(newLine); err != nil {
-		f.Close()
+		_ = f.Close()
 		t.Fatalf("append line: %v", err)
 	}
-	f.Close()
+	_ = f.Close()
 
 	// Second parse: offset > 0, session header is NOT re-read.
 	// Bug: acc.sessionID stays empty → update.SessionID == "" → monitor skips it.

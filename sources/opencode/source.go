@@ -75,7 +75,7 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	if db == nil {
 		return nil, nil
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	var cutoff time.Time
 	if s.window > 0 {
@@ -115,7 +115,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	if db == nil {
 		return source.SourceUpdate{}, c, nil
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 
 	result, newCur, err := queryParseData(db, h.ID, cur)
 	if err != nil {

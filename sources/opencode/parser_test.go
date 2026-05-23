@@ -390,7 +390,7 @@ func createTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() { _ = db.Close() })
 	if _, err := db.Exec(createSchema); err != nil {
 		t.Fatal(err)
 	}

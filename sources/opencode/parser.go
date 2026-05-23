@@ -82,7 +82,7 @@ func discoverSessions(db *sql.DB, cutoff time.Time) ([]sessionRow, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opencode: query sessions: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 
 	var sessions []sessionRow
 	for rows.Next() {
