@@ -160,6 +160,55 @@ func TestRegisterDuplicate(t *testing.T) {
 	}
 }
 
+// ---- Parse: incremental SessionID ------------------------------------------
+
+// TestParseIncrementalSessionID reproduces the bug where an incremental parse
+// (offset > 0) returns an empty SessionID because the "session" header line is
+// not re-read. The monitor treats SessionID == "" as "no new data" and skips
+// the update, so any new lines appended after the first parse are silently
+// dropped.
+func TestParseIncrementalSessionID(t *testing.T) {
+	initialContent := `{"type":"session","id":"inc001","version":3,"timestamp":"2024-01-15T10:00:00Z","workingDir":"/proj"}
+{"type":"message","id":"m1","parentId":"inc001","timestamp":"2024-01-15T10:00:05Z","message":{"role":"user","content":"Hello"}}
+`
+	root, h := writeSession(t, "inc001", initialContent)
+	src := pi.New(pi.WithRoot(root))
+
+	// First parse: reads from offset 0, session header is present.
+	u1, c1, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("first Parse error: %v", err)
+	}
+	if u1.SessionID != "inc001" {
+		t.Errorf("first parse SessionID = %q, want %q", u1.SessionID, "inc001")
+	}
+
+	// Append a new message to simulate ongoing session activity.
+	newLine := `{"type":"message","id":"m2","parentId":"m1","timestamp":"2024-01-15T10:00:10Z","message":{"role":"assistant","model":"claude-opus-4-6","usage":{"input":100,"output":20},"stopReason":"end_turn"}}` + "\n"
+	f, err := os.OpenFile(h.Path, os.O_APPEND|os.O_WRONLY, 0644)
+	if err != nil {
+		t.Fatalf("open file for append: %v", err)
+	}
+	if _, err := f.WriteString(newLine); err != nil {
+		f.Close()
+		t.Fatalf("append line: %v", err)
+	}
+	f.Close()
+
+	// Second parse: offset > 0, session header is NOT re-read.
+	// Bug: acc.sessionID stays empty → update.SessionID == "" → monitor skips it.
+	u2, _, err := src.Parse(context.Background(), h, c1)
+	if err != nil {
+		t.Fatalf("second Parse error: %v", err)
+	}
+	if u2.SessionID != "inc001" {
+		t.Errorf("incremental parse SessionID = %q, want %q", u2.SessionID, "inc001")
+	}
+	if u2.MessageCountDelta != 1 {
+		t.Errorf("incremental parse MessageCountDelta = %d, want 1", u2.MessageCountDelta)
+	}
+}
+
 // ---- Parse: cursor mechanics -----------------------------------------------
 
 func TestParseCursorAdvances(t *testing.T) {

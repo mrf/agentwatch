@@ -152,6 +152,9 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	}
 
 	update := acc.toUpdate()
+	if len(lines) > 0 {
+		update.SessionID = h.ID
+	}
 	next := source.Cursor(strconv.FormatInt(nextOffset, 10))
 	return update, next, nil
 }
