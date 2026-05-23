@@ -277,6 +277,29 @@ func TestParseNormalTranscript(t *testing.T) {
 	}
 }
 
+func TestParseNoDataReturnsZeroUpdate(t *testing.T) {
+	h := writeTranscript(t, "home-user-proj", "nodata001", flatFixture)
+	src := cursor.New()
+
+	// First parse: consumes the lines, gets a non-empty SessionID.
+	u1, c1, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("first Parse error: %v", err)
+	}
+	if u1.SessionID == "" {
+		t.Error("first Parse: expected non-empty SessionID")
+	}
+
+	// Second parse with returned cursor: no new lines → zero SourceUpdate.
+	u2, _, err := src.Parse(context.Background(), h, c1)
+	if err != nil {
+		t.Fatalf("second Parse error: %v", err)
+	}
+	if u2.SessionID != "" {
+		t.Errorf("second Parse: SessionID = %q, want empty (zero SourceUpdate)", u2.SessionID)
+	}
+}
+
 func TestParseMalformedLinesSkipped(t *testing.T) {
 	content := "not json\n" +
 		`{"role":"user","message":{"content":[]}}` + "\n" +
