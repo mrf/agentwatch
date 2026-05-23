@@ -294,21 +294,15 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 
 	m.mu.Lock()
 	for id, s := range m.store {
-		if s.Lifecycle != session.LifecycleTerminal {
+		if s.Lifecycle != session.LifecycleTerminal || s.CompletedAt == nil {
 			continue
 		}
-		if s.CompletedAt == nil {
+		if now.Sub(*s.CompletedAt) < m.cfg.completionRetention {
 			continue
 		}
-		if now.Sub(*s.CompletedAt) >= m.cfg.completionRetention {
-			removedIDs = append(removedIDs, id)
-		}
-	}
-	for i := 0; i < len(removedIDs); i++ {
-		id := removedIDs[i]
-		s := m.store[id]
 		delete(m.store, id)
 		m.removed[id] = struct{}{}
+		removedIDs = append(removedIDs, id)
 
 		lifecycles = append(lifecycles, session.LifecycleEvent{
 			Type:      session.EventRemoved,
@@ -364,43 +358,7 @@ func (m *Monitor) Run(ctx context.Context) error {
 			if err := m.PollOnce(ctx); err != nil {
 				return err
 			}
-			m.reapTerminal(ctx)
 		}
-	}
-}
-
-// reapTerminal removes terminal sessions whose retention window has expired
-// and emits EventRemoved lifecycle events for each removal.
-func (m *Monitor) reapTerminal(ctx context.Context) {
-	now := m.cfg.clock.Now()
-
-	m.mu.Lock()
-	var removals []session.LifecycleEvent
-	for id, state := range m.store {
-		if state.Lifecycle != session.LifecycleTerminal {
-			continue
-		}
-		if state.CompletedAt == nil {
-			continue
-		}
-		if now.Sub(*state.CompletedAt) < m.cfg.completionRetention {
-			continue
-		}
-		delete(m.store, id)
-		m.removed[id] = struct{}{}
-		removals = append(removals, session.LifecycleEvent{
-			Type:      session.EventRemoved,
-			SessionID: id,
-			Source:    state.Source,
-			From:      session.LifecycleTerminal,
-			At:        now,
-			Reason:    "retention expired",
-		})
-	}
-	m.mu.Unlock()
-
-	if m.cfg.sink != nil && len(removals) > 0 {
-		m.emitLifecycleEvents(ctx, removals)
 	}
 }
 
