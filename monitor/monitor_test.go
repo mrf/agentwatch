@@ -1167,6 +1167,80 @@ func TestTransition_TerminalToRemoved(t *testing.T) {
 	}
 }
 
+// TestPollOnce_RetentionSweepOwnership verifies that PollOnce is the sole owner
+// of the retention sweep — no separate reapTerminal pass is needed.
+// A session that becomes terminal and then ages past the retention window must
+// be removed by PollOnce alone, with both an EventRemoved lifecycle event and
+// a delta event carrying the removed ID.
+func TestPollOnce_RetentionSweepOwnership(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	retention := 10 * time.Second
+	sink := &recordingSink{}
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithSink(sink),
+		monitor.WithClock(clk),
+		monitor.WithCompletionRetention(retention),
+		monitor.WithStaleThreshold(0),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Terminal: true}, "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+	if snap := m.Snapshot(); len(snap) != 1 || snap[0].Lifecycle != session.LifecycleTerminal {
+		t.Fatalf("expected 1 terminal session after poll 2, got %v", snap)
+	}
+
+	// Advance past retention and poll — no separate reap call.
+	clk.Advance(retention + time.Second)
+	sink.events = nil
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+
+	if snap := m.Snapshot(); len(snap) != 0 {
+		t.Errorf("expected 0 sessions after retention, got %d", len(snap))
+	}
+
+	var gotLifecycle, gotDelta bool
+	for i := 0; i < len(sink.events); i++ {
+		ev := sink.events[i]
+		if ev.Type == monitor.EventLifecycle && ev.Lifecycle != nil &&
+			ev.Lifecycle.Type == session.EventRemoved && ev.Lifecycle.SessionID == "s1" {
+			gotLifecycle = true
+		}
+		if ev.Type == monitor.EventDelta && len(ev.Removed) == 1 && ev.Removed[0] == "s1" {
+			gotDelta = true
+		}
+	}
+	if !gotLifecycle {
+		t.Error("no EventRemoved lifecycle event from PollOnce")
+	}
+	if !gotDelta {
+		t.Error("no delta event with removed ID from PollOnce")
+	}
+}
+
 // TestTransition_TerminalNotRemovedBeforeRetention verifies that a terminal
 // session is retained within the retention window.
 func TestTransition_TerminalNotRemovedBeforeRetention(t *testing.T) {
