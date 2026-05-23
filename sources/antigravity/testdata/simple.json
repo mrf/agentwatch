@@ -1,5 +1,6 @@
 {
-  "conversationHistory": [
+  "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "messages": [
     {
       "role": "user",
       "parts": [{"text": "hello, help me refactor this code"}]
@@ -8,11 +9,12 @@
       "role": "model",
       "parts": [{"text": "Sure, I can help you refactor the code."}],
       "usageMetadata": {
-        "promptTokenCount": 20,
-        "candidatesTokenCount": 12,
+        "inputTokenCount": 20,
+        "outputTokenCount": 12,
         "totalTokenCount": 32
       }
     }
   ],
-  "model": "gemini-2.0-flash"
+  "model": "gemini-2.5-pro",
+  "status": "active"
 }
