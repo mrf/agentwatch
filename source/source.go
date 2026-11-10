@@ -28,6 +28,16 @@ type Source interface {
 	// cursor c. It returns the parsed update, the next cursor position, and
 	// any error. If no new data is available, it returns a zero SourceUpdate
 	// and the same cursor.
+	//
+	// The monitor persists the returned cursor on every call — with data,
+	// with a zero SourceUpdate, and alongside a non-nil error — and never
+	// inspects or compares it. The cursor is therefore the source's only way
+	// to control re-reads:
+	//   - To consume input without reporting it (progress-only batches, an
+	//     unparseable file), return the advanced cursor. A zero SourceUpdate
+	//     does not create or refresh a session.
+	//   - To retry the same input on the next poll (a transient failure),
+	//     return the cursor you were given, c, along with the error.
 	Parse(ctx context.Context, h SessionHandle, c Cursor) (SourceUpdate, Cursor, error)
 }
 
