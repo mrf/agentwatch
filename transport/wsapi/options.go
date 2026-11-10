@@ -4,6 +4,8 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+
+	"github.com/mrf/agentwatch/session"
 )
 
 // Option configures a Server.
@@ -32,6 +34,7 @@ type serverConfig struct {
 	rateBurst      int
 	rateWindow     time.Duration
 	logger         *slog.Logger
+	policy         session.Policy
 }
 
 func defaultServerConfig() serverConfig {
@@ -123,5 +126,16 @@ func WithRateLimit(limit, burst int, window time.Duration) Option {
 func WithLogger(l *slog.Logger) Option {
 	return func(c *serverConfig) {
 		c.logger = l
+	}
+}
+
+// WithPolicy sets the privacy policy applied to every event before it is
+// sent: snapshot sessions, delta updates and removed IDs, and lifecycle
+// session IDs and sources. A zero-value Policy is a pass-through — nothing
+// is redacted. Use the same Policy as httpapi.WithPolicy so /ws does not
+// expose what HTTP redacts.
+func WithPolicy(p session.Policy) Option {
+	return func(c *serverConfig) {
+		c.policy = p
 	}
 }

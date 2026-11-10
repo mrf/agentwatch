@@ -26,7 +26,7 @@ type Policy struct {
 	RedactModel bool
 
 	// RedactSessionID replaces ID and Slug with empty strings, and also
-	// clears ID and ParentID on every Subagent. Session identifiers can
+	// clears ID, ParentID, and Slug on every Subagent. Session identifiers can
 	// correlate activity across requests or log streams.
 	RedactSessionID bool
 
@@ -59,6 +59,7 @@ func (p Policy) Apply(s SessionState) SessionState {
 		for i := range out.Subagents {
 			out.Subagents[i].ID = ""
 			out.Subagents[i].ParentID = ""
+			out.Subagents[i].Slug = ""
 		}
 	}
 	if p.RedactSource {

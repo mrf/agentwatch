@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"github.com/mrf/agentwatch/monitor"
+	"github.com/mrf/agentwatch/session"
 )
 
 // broadcaster fans out monitor events to connected WebSocket clients.
@@ -17,22 +18,24 @@ type broadcaster struct {
 	clients map[*conn]struct{}
 
 	maxConns int
+	policy   session.Policy
 	logger   *slog.Logger
 }
 
-func newBroadcaster(maxConns int, logger *slog.Logger) *broadcaster {
+func newBroadcaster(maxConns int, policy session.Policy, logger *slog.Logger) *broadcaster {
 	return &broadcaster{
 		clients:  make(map[*conn]struct{}),
 		maxConns: maxConns,
+		policy:   policy,
 		logger:   logger,
 	}
 }
 
-// HandleEvent implements monitor.EventSink. It serializes the event once
-// and fans out to all connected clients via non-blocking channel sends.
+// HandleEvent implements monitor.EventSink. It applies the privacy policy,
+// serializes the event once, and fans out to all connected clients via non-blocking channel sends.
 // Slow clients (whose buffers are full) are evicted.
 func (b *broadcaster) HandleEvent(_ context.Context, ev monitor.Event) error {
-	data, err := json.Marshal(ev)
+	data, err := json.Marshal(applyPolicy(b.policy, ev))
 	if err != nil {
 		b.logger.Warn("event marshal failed", "error", err)
 		return err

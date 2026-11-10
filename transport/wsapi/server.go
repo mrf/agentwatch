@@ -41,7 +41,7 @@ func NewServer(mon *monitor.Monitor, opts ...Option) (*Server, error) {
 	s := &Server{
 		mon:         mon,
 		cfg:         cfg,
-		bcast:       newBroadcaster(cfg.maxConnections, cfg.logger),
+		bcast:       newBroadcaster(cfg.maxConnections, cfg.policy, cfg.logger),
 		rateLimiter: newClientRateLimiter(cfg.rateLimit, cfg.rateWindow, cfg.rateBurst),
 		logger:      cfg.logger,
 	}
@@ -161,7 +161,7 @@ func (s *Server) sendSnapshot(c *conn) {
 		At:       time.Now(),
 		Sessions: sessions,
 	}
-	data, err := json.Marshal(ev)
+	data, err := json.Marshal(applyPolicy(s.cfg.policy, ev))
 	if err != nil {
 		s.logger.Warn("snapshot marshal failed", "error", err)
 		return

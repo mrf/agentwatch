@@ -37,6 +37,7 @@ func fullState() session.SessionState {
 			{
 				ID:             "sub-1",
 				ParentID:       "sess-abc",
+				Slug:           "sub-slug",
 				Activity:       session.ActivityIdle,
 				CurrentTool:    "Read",
 				StartedAt:      now,
@@ -146,6 +147,9 @@ func TestPolicy_Apply_RedactSessionID(t *testing.T) {
 		if sub.ParentID != "" {
 			t.Errorf("Subagents[%d].ParentID: expected empty, got %q", i, sub.ParentID)
 		}
+		if sub.Slug != "" {
+			t.Errorf("Subagents[%d].Slug: expected empty, got %q", i, sub.Slug)
+		}
 	}
 	// Non-ID fields must survive.
 	if got.Source != s.Source {
@@ -207,6 +211,9 @@ func TestPolicy_Apply_FullRedaction(t *testing.T) {
 		}
 		if sub.ParentID != "" {
 			t.Errorf("Subagents[%d].ParentID not redacted: %q", i, sub.ParentID)
+		}
+		if sub.Slug != "" {
+			t.Errorf("Subagents[%d].Slug not redacted: %q", i, sub.Slug)
 		}
 		if sub.Model != "" {
 			t.Errorf("Subagents[%d].Model not redacted: %q", i, sub.Model)
