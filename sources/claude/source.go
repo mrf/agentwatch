@@ -10,6 +10,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"io/fs"
 	"net/url"
 	"os"
@@ -342,41 +343,22 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 	}
 	s.lastMarkerScan = now
 
-	f, err := os.Open(s.sessionEndDir)
-	if err != nil {
-		return
-	}
-	defer func() { _ = f.Close() }()
-
-	entries, err := f.ReadDir(256)
-	if err != nil {
-		return
-	}
+	names := s.listEndMarkerNames()
 
 	maxSize := int64(s.maxEndMarkerSize)
 	if maxSize <= 0 {
 		maxSize = defaultMaxEndMarkerSize
 	}
 
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
+	for _, name := range names {
+		path := filepath.Join(s.sessionEndDir, name)
 
-		info, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		path := filepath.Join(s.sessionEndDir, entry.Name())
-
-		if info.Size() > maxSize {
-			_ = os.Remove(path)
-			continue
-		}
-
-		data, err := os.ReadFile(path)
-		if err != nil {
+		data, ok := readBoundedRegularFile(path, maxSize)
+		if !ok {
+			// Unreadable, not a regular file, or oversize. The name matched
+			// the hook's pattern; remove it only if it is still a plain
+			// regular file (never touch a FIFO, symlink, or directory).
+			removeIfRegular(path)
 			continue
 		}
 
@@ -417,6 +399,68 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 			}
 		}
 
+		_ = os.Remove(path)
+	}
+}
+
+// isEndMarkerName reports whether name is one the SessionEnd hook writes:
+// "<session_id>.json" with a session ID that passes the same character and
+// length rules as the marker's own session_id field.
+func isEndMarkerName(name string) bool {
+	id, ok := strings.CutSuffix(name, ".json")
+	return ok && id != "" && len(id) <= maxSessionIDLen && validSessionIDRe.MatchString(id)
+}
+
+// listEndMarkerNames returns the names of every regular file in sessionEndDir
+// that looks like a hook-written marker. It loops ReadDir until the directory
+// is exhausted and collects names before any file is removed, so deleting
+// markers cannot disturb the directory iteration.
+func (s *ClaudeSource) listEndMarkerNames() []string {
+	f, err := os.Open(s.sessionEndDir)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = f.Close() }()
+
+	var names []string
+	for {
+		entries, err := f.ReadDir(256)
+		for _, entry := range entries {
+			if entry.Type().IsRegular() && isEndMarkerName(entry.Name()) {
+				names = append(names, entry.Name())
+			}
+		}
+		if err != nil {
+			// io.EOF ends the scan; any other error keeps what was read.
+			return names
+		}
+	}
+}
+
+// readBoundedRegularFile reads path only if it is a regular file no larger
+// than maxSize. The mode is re-checked on the open handle and the read is
+// capped, so a file swapped or grown after listing cannot overrun the bound.
+func readBoundedRegularFile(path string, maxSize int64) ([]byte, bool) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, false
+	}
+	defer func() { _ = f.Close() }()
+
+	info, err := f.Stat()
+	if err != nil || !info.Mode().IsRegular() || info.Size() > maxSize {
+		return nil, false
+	}
+	data, err := io.ReadAll(io.LimitReader(f, maxSize+1))
+	if err != nil || int64(len(data)) > maxSize {
+		return nil, false
+	}
+	return data, true
+}
+
+// removeIfRegular removes path only if it is currently a regular file.
+func removeIfRegular(path string) {
+	if info, err := os.Lstat(path); err == nil && info.Mode().IsRegular() {
 		_ = os.Remove(path)
 	}
 }
