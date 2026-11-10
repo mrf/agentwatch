@@ -100,6 +100,15 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			m.mu.Unlock()
 
 			update, newCursor, parseErr := src.Parse(ctx, h, cursor)
+
+			// Persist the returned cursor unconditionally: the source
+			// contract says a source that wants a retry returns the cursor
+			// it was given, so empty batches and errors must not drop an
+			// advance (design rule 5: never inspect or compare a Cursor).
+			m.mu.Lock()
+			m.cursors[cKey] = newCursor
+			m.mu.Unlock()
+
 			if parseErr != nil {
 				m.cfg.logger.Warn("parse failed",
 					"source", srcName,
@@ -121,7 +130,6 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			// Events are delivered after unlock (§12.8).
 			m.mu.Lock()
 
-			m.cursors[cKey] = newCursor
 			existing, existed := m.store[h.ID]
 
 			var state session.SessionState

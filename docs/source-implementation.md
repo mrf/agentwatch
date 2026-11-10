@@ -154,6 +154,13 @@ Return an error from `Discover` or `Parse` to signal a failure. The monitor logs
 
 Do not return an error when there is simply no new data — return a zero `SourceUpdate` and the same cursor instead.
 
+The cursor you return is persisted **even when you also return an error** or a zero `SourceUpdate`. The monitor never inspects or compares it, so the cursor is how you choose between the two behaviors:
+
+- **Skip the input** (an unparseable file, a batch holding only records you do not report): return the *advanced* cursor. The monitor will not re-read it. For an error, the failure is counted once against source health, and health recovers on the next clean poll.
+- **Retry the input** (a transient read failure): return the cursor you were *given* (`c`) with the error.
+
+A zero `SourceUpdate` never creates a session or refreshes `LastDataReceivedAt`; only a non-zero update counts as data for stale detection.
+
 ## Using the Source Registry
 
 `source.Registry` maps names to factory functions for dynamic source lookup. It is optional — pass sources directly to `monitor.WithSources` if you do not need it.
