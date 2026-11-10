@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -447,7 +448,7 @@ func TestParseOldBareFormatFlatTokenCount(t *testing.T) {
 
 // ---- Parse: oversized file / line ------------------------------------------
 
-func TestParseOversizedFileReturnsError(t *testing.T) {
+func TestParseFileLargerThanOldCapIsReadable(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "rollout-0-01234567-abcd-ef01-2345-67890abcdef0.jsonl")
 
@@ -470,10 +471,14 @@ func TestParseOversizedFileReturnsError(t *testing.T) {
 	src := codex.New(codex.WithRoot(dir))
 	h := source.SessionHandle{ID: "huge-test", Path: path, Source: "codex"}
 
-	_, _, err = src.Parse(context.Background(), h, "")
-	if err == nil {
-		t.Fatal("expected error for oversized file, got nil")
+	// Total file size must not wedge the session: the complete line is
+	// read and the cursor stops at the unterminated tail.
+	u, c, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
 	}
+	assertEqual(t, "Model", u.Model, "o3")
+	assertEqual(t, "Cursor", string(c), strconv.Itoa(len(line)))
 }
 
 func TestParseOversizedLineIsSkipped(t *testing.T) {
@@ -490,12 +495,15 @@ func TestParseOversizedLineIsSkipped(t *testing.T) {
 	src := codex.New(codex.WithRoot(dir))
 	h := source.SessionHandle{ID: "bigline-test", Path: path, Source: "codex"}
 
-	// When a line exceeds the cap the entire ReadLines call returns an error.
-	// The source surfaces it transparently.
-	_, _, err := src.Parse(context.Background(), h, "")
-	if err == nil {
-		t.Fatal("expected error when a line exceeds the size cap")
+	// The oversized line is skipped; lines on either side still parse and the
+	// cursor moves past the whole file.
+	u, c, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
 	}
+	assertEqual(t, "Model", u.Model, "o3")
+	assertEqual(t, "WorkingDir", u.WorkingDir, "/tmp/proj")
+	assertEqual(t, "Cursor", string(c), strconv.Itoa(len(normal)+len(oversized)+len(after)))
 }
 
 // ---- helpers ---------------------------------------------------------------
