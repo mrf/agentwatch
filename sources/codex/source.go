@@ -141,13 +141,22 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 		return source.SourceUpdate{}, c, fmt.Errorf("codex: read %s: %w", h.Path, err)
 	}
 
+	// No new complete lines: return the zero SourceUpdate the monitor treats
+	// as "no new data" so idle polls don't refresh the session's liveness.
+	if len(lines) == 0 {
+		return source.SourceUpdate{}, source.Cursor(strconv.FormatInt(nextOffset, 10)), nil
+	}
+
 	isFirst := offset == 0
 	var acc accumulator
 	for i := 0; i < len(lines); i++ {
 		parseLine(lines[i], isFirst && i == 0, &acc)
 	}
 
+	// The handle ID is stable for the file; session_meta only appears in the
+	// first batch, so it can't be the source of the monitor's session key.
 	update := acc.toUpdate()
+	update.SessionID = h.ID
 	next := source.Cursor(strconv.FormatInt(nextOffset, 10))
 	return update, next, nil
 }
@@ -196,7 +205,6 @@ func isUUID(s string) bool {
 
 // accumulator collects incremental fields from JSONL lines.
 type accumulator struct {
-	sessionID        string
 	model            string
 	workingDir       string
 	activity         session.Activity
@@ -212,7 +220,6 @@ type accumulator struct {
 
 func (a *accumulator) toUpdate() source.SourceUpdate {
 	return source.SourceUpdate{
-		SessionID:          a.sessionID,
 		Model:              a.model,
 		WorkingDir:         a.workingDir,
 		Activity:           a.activity,
@@ -227,16 +234,33 @@ func (a *accumulator) toUpdate() source.SourceUpdate {
 	}
 }
 
+// noteActivity records ts (RFC 3339) as the latest activity time seen in this
+// batch. Unparseable or older timestamps are ignored.
+func (a *accumulator) noteActivity(ts string) {
+	if ts == "" {
+		return
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return
+	}
+	if t.After(a.lastActivityAt) {
+		a.lastActivityAt = t
+	}
+}
+
 // parseLine dispatches a single JSONL line into the accumulator.
 // firstLine is true only for the very first line of the file (offset zero).
 func parseLine(line []byte, firstLine bool, a *accumulator) {
 	var envelope struct {
-		Type    string          `json:"type"`
-		Payload json.RawMessage `json:"payload"`
+		Type      string          `json:"type"`
+		Timestamp string          `json:"timestamp"`
+		Payload   json.RawMessage `json:"payload"`
 	}
 	if json.Unmarshal(line, &envelope) != nil {
 		return
 	}
+	a.noteActivity(envelope.Timestamp)
 
 	if envelope.Type != "" && len(envelope.Payload) > 0 {
 		parseEnvelope(envelope.Type, envelope.Payload, a)
@@ -277,6 +301,8 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 			a.activity = session.ActivityWorking
 		case "agent_reasoning":
 			a.activity = session.ActivityWorking
+		case "task_complete":
+			a.activity = session.ActivityWaiting
 		case "token_count":
 			// Newer format: top-level "info" inside the event_msg payload.
 			if len(event.Info) > 0 && string(event.Info) != "null" {
@@ -320,21 +346,15 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 	}
 }
 
-// parseSessionMeta extracts session ID, model, and start time from a
+// parseSessionMeta extracts model and start time from a
 // session_meta payload. Used by both the envelope and bare formats.
 func parseSessionMeta(data json.RawMessage, a *accumulator) {
 	var meta struct {
-		ID             string          `json:"id"`
-		SessionID      string          `json:"session_id"`
-		ConversationID string          `json:"conversation_id"`
-		Model          json.RawMessage `json:"model"`
-		Timestamp      string          `json:"timestamp"`
+		Model     json.RawMessage `json:"model"`
+		Timestamp string          `json:"timestamp"`
 	}
 	if json.Unmarshal(data, &meta) != nil {
 		return
-	}
-	if id := firstNonEmpty(meta.ID, meta.SessionID, meta.ConversationID); id != "" {
-		a.sessionID = id
 	}
 	if m := parseModel(meta.Model); m != "" {
 		a.model = m
