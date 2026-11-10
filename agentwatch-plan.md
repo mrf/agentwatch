@@ -447,7 +447,7 @@ All source paths are relative to the `agent-racer` repo root. Pin a source SHA b
 | Source path | Preserve | Destination |
 |---|---|---|
 | `backend/internal/monitor/source.go` | Interface intent and source comments, not the exact `offset int64` API | `source/source.go` |
-| `backend/internal/jsonl/jsonl.go` | Complete-line iteration, file-size cap, line-size cap | `internal/jsonl/reader.go` |
+| `backend/internal/jsonl/jsonl.go` | Complete-line iteration, line-size cap. **Deliberate divergence (agentwatch-33a):** the total-file-size cap (`ErrFileTooLarge`) and the fail-on-oversized-line behavior (`ErrLineTooLong`, offset unchanged) are replaced by a per-call read budget and skip-and-count of oversized lines (`Result.Skipped`), because both errors wedged a session's cursor permanently. The pinned-SHA comparison could not be done — ADR 0001's SHA is still PENDING. | `internal/jsonl/reader.go` |
 | `backend/internal/monitor/jsonl.go` | Claude parsing knowledge, subagent parsing behavior, path decode logic if still needed | `sources/claude` private parser files |
 | `backend/internal/session/store.go` | Clone discipline and lock-release-before-callback pattern | `monitor` or private store package |
 | `backend/internal/session/tail.go` | Incremental tailing behavior if still needed by sources | `internal/jsonl` or source-private code |

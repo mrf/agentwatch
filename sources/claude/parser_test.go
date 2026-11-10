@@ -800,6 +800,31 @@ func TestParse_CursorNoNewData(t *testing.T) {
 	}
 }
 
+func TestParse_OversizedLineOnlyAdvancesCursor(t *testing.T) {
+	// A transcript whose only unread content is one over-cap line must not
+	// wedge the cursor: Parse has to advance past it so the next poll does not
+	// re-scan it.
+	s := newTestSource(t)
+	path := filepath.Join(t.TempDir(), "big.jsonl")
+	huge := strings.Repeat("x", 1<<20+1) + "\n"
+	if err := os.WriteFile(path, []byte(huge), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	h := source.SessionHandle{ID: "dddddddd-0000-0000-0000-000000000001", Path: path, Source: "claude"}
+
+	_, c1, err := s.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	cc, err := decodeCursor(c1)
+	if err != nil {
+		t.Fatalf("decodeCursor: %v", err)
+	}
+	if cc.Offset != int64(len(huge)) {
+		t.Errorf("cursor offset = %d, want %d (past the oversized line)", cc.Offset, len(huge))
+	}
+}
+
 func TestParse_SessionIDFallsBackToHandle(t *testing.T) {
 	// If the JSONL has no sessionId field, Parse uses the handle ID.
 	dir := t.TempDir()

@@ -253,6 +253,12 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 			nextCursor, _ := encodeCursor(claudeCursor{Offset: nextOffset, Parents: cc.Parents})
 			return update, nextCursor, nil
 		}
+		if nextOffset != cc.Offset {
+			// Every line consumed was skipped as oversized: advance past
+			// them so the next poll does not re-scan.
+			nextCursor, _ := encodeCursor(claudeCursor{Offset: nextOffset, Parents: cc.Parents})
+			return source.SourceUpdate{}, nextCursor, nil
+		}
 		return source.SourceUpdate{}, c, nil
 	}
 

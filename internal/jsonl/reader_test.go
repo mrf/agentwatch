@@ -1,6 +1,7 @@
 package jsonl
 
 import (
+	"bytes"
 	"errors"
 	"os"
 	"path/filepath"
@@ -177,48 +178,6 @@ func TestReadLines_OffsetAtEndOfFile(t *testing.T) {
 	}
 }
 
-func TestReadLines_LineTooLong(t *testing.T) {
-	// A line of 10 bytes (excluding newline), cap set to 5.
-	content := "0123456789\n"
-	path := writeFile(t, content)
-	opts := Options{MaxLineSize: 5}
-	_, _, err := ReadLines(path, 0, opts)
-	if err == nil {
-		t.Fatal("expected error for oversized line, got nil")
-	}
-	if !errors.Is(err, ErrLineTooLong) {
-		t.Errorf("expected ErrLineTooLong, got %v", err)
-	}
-}
-
-func TestReadLines_LineTooLong_OffsetRetained(t *testing.T) {
-	// When ErrLineTooLong is returned, nextOffset must equal the original offset
-	// so the caller knows no progress was made.
-	content := "ok\ntoolongline\n"
-	path := writeFile(t, content)
-	opts := Options{MaxLineSize: 5}
-	_, nextOffset, err := ReadLines(path, 0, opts)
-	if !errors.Is(err, ErrLineTooLong) {
-		t.Fatalf("expected ErrLineTooLong, got %v", err)
-	}
-	if nextOffset != 0 {
-		t.Errorf("expected nextOffset 0 on error, got %d", nextOffset)
-	}
-}
-
-func TestReadLines_FileTooLarge(t *testing.T) {
-	content := "some content\n"
-	path := writeFile(t, content)
-	opts := Options{MaxFileSize: 5}
-	_, _, err := ReadLines(path, 0, opts)
-	if err == nil {
-		t.Fatal("expected error for oversized file, got nil")
-	}
-	if !errors.Is(err, ErrFileTooLarge) {
-		t.Errorf("expected ErrFileTooLarge, got %v", err)
-	}
-}
-
 func TestReadLines_BinaryGarbage(t *testing.T) {
 	// Non-UTF-8 bytes should be returned as-is (JSON validation is caller's job).
 	garbage := []byte{0xFF, 0xFE, 0x00, 0x01, '\n', 0xDE, 0xAD, '\n'}
@@ -312,28 +271,6 @@ func TestReadLines_DefaultCaps(t *testing.T) {
 	}
 }
 
-func TestReadLines_ExactLineCap(t *testing.T) {
-	// A line exactly at the cap should succeed; one byte over should fail.
-	content := "12345\n"
-	path := writeFile(t, content)
-
-	opts := Options{MaxLineSize: 5}
-	lines, _, err := ReadLines(path, 0, opts)
-	if err != nil {
-		t.Fatalf("line at exact cap should not error: %v", err)
-	}
-	if len(lines) != 1 {
-		t.Errorf("expected 1 line, got %d", len(lines))
-	}
-
-	content2 := "123456\n"
-	path2 := writeFile(t, content2)
-	_, _, err = ReadLines(path2, 0, opts)
-	if !errors.Is(err, ErrLineTooLong) {
-		t.Errorf("expected ErrLineTooLong for line one byte over cap, got %v", err)
-	}
-}
-
 func TestReadLines_ReturnedSlicesAreIndependent(t *testing.T) {
 	// Verify that each returned []byte is an independent copy, not a slice into
 	// a shared backing array that could be mutated.
@@ -349,5 +286,177 @@ func TestReadLines_ReturnedSlicesAreIndependent(t *testing.T) {
 	lines[0][0] = 'X'
 	if lines[1][0] == 'X' {
 		t.Error("mutating lines[0] affected lines[1]: slices share backing array")
+	}
+}
+
+func TestRead_ExactLineCap(t *testing.T) {
+	// A line exactly at the cap is kept; one byte over is skipped.
+	path := writeFile(t, "12345\n123456\n")
+	res, err := Read(path, 0, Options{MaxLineSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Lines) != 1 || string(res.Lines[0]) != "12345" {
+		t.Errorf("lines = %q, want [12345]", res.Lines)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", res.Skipped)
+	}
+	if res.NextOffset != 13 {
+		t.Errorf("NextOffset = %d, want 13", res.NextOffset)
+	}
+}
+
+func TestRead_OversizedLineSkipped(t *testing.T) {
+	content := "ok\ntoolongline\nnext\n"
+	path := writeFile(t, content)
+	res, err := Read(path, 0, Options{MaxLineSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Lines) != 2 || string(res.Lines[0]) != "ok" || string(res.Lines[1]) != "next" {
+		t.Errorf("lines = %q, want [ok next]", res.Lines)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", res.Skipped)
+	}
+	if res.NextOffset != int64(len(content)) {
+		t.Errorf("NextOffset = %d, want %d", res.NextOffset, len(content))
+	}
+}
+
+func TestRead_OnlyOversizedLineAdvancesOffset(t *testing.T) {
+	content := "toolongline\n"
+	path := writeFile(t, content)
+	res, err := Read(path, 0, Options{MaxLineSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Lines) != 0 || res.Skipped != 1 || res.NextOffset != int64(len(content)) {
+		t.Errorf("got lines=%d skipped=%d next=%d", len(res.Lines), res.Skipped, res.NextOffset)
+	}
+}
+
+func TestRead_OversizedLargerThanReadBuffer(t *testing.T) {
+	// A skipped line far larger than any internal buffer must still be
+	// skipped without being returned.
+	big := strings.Repeat("x", 300_000)
+	content := "a\n" + big + "\nb\n"
+	path := writeFile(t, content)
+	res, err := Read(path, 0, Options{MaxLineSize: 1000})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Lines) != 2 || string(res.Lines[0]) != "a" || string(res.Lines[1]) != "b" {
+		t.Errorf("lines = %d, want [a b]", len(res.Lines))
+	}
+	if res.Skipped != 1 || res.NextOffset != int64(len(content)) {
+		t.Errorf("skipped=%d next=%d, want 1/%d", res.Skipped, res.NextOffset, len(content))
+	}
+}
+
+func TestRead_UnterminatedOversizedLineWaits(t *testing.T) {
+	// An oversized line that has no newline yet is not skipped (it may still
+	// be growing): the offset stays at its start.
+	content := "ok\ntoolongpartial"
+	path := writeFile(t, content)
+	res, err := Read(path, 0, Options{MaxLineSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Lines) != 1 || res.Skipped != 0 || res.NextOffset != 3 {
+		t.Errorf("got lines=%d skipped=%d next=%d, want 1/0/3", len(res.Lines), res.Skipped, res.NextOffset)
+	}
+	// Once the newline lands, the line is skipped and the offset advances.
+	if err := os.WriteFile(path, []byte(content+"\nz\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	res, err = Read(path, res.NextOffset, Options{MaxLineSize: 5})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(res.Lines) != 1 || string(res.Lines[0]) != "z" || res.Skipped != 1 {
+		t.Errorf("got lines=%q skipped=%d", res.Lines, res.Skipped)
+	}
+}
+
+func TestRead_BudgetConsumedIncrementally(t *testing.T) {
+	// 10 lines of 10 bytes each (9 chars + newline), budget of 35 bytes:
+	// each call stops after the line that crosses the budget.
+	var content strings.Builder
+	for i := 0; i < 10; i++ {
+		content.WriteString("line-00" + string(rune('0'+i)) + "\n")
+	}
+	path := writeFile(t, content.String())
+	opts := Options{MaxReadBytes: 35}
+
+	var got []string
+	var offset int64
+	calls := 0
+	for offset < int64(content.Len()) {
+		calls++
+		if calls > 20 {
+			t.Fatal("not making progress")
+		}
+		res, err := Read(path, offset, opts)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if res.NextOffset <= offset {
+			t.Fatalf("no progress: offset %d -> %d", offset, res.NextOffset)
+		}
+		if len(res.Lines) > 4 {
+			t.Errorf("call %d returned %d lines, budget should cap at 4", calls, len(res.Lines))
+		}
+		for _, l := range res.Lines {
+			got = append(got, string(l))
+		}
+		offset = res.NextOffset
+	}
+	if len(got) != 10 || got[0] != "line-000" || got[9] != "line-009" {
+		t.Errorf("got %d lines %q", len(got), got)
+	}
+	if calls < 3 {
+		t.Errorf("expected multiple calls, got %d", calls)
+	}
+}
+
+func TestRead_FileLargerThanBudgetIsReadable(t *testing.T) {
+	// Regression: a file larger than the old total-size cap used to fail on
+	// every poll. Resuming mid-file must work regardless of total size.
+	line := strings.Repeat("y", 99) + "\n"
+	path := writeFile(t, strings.Repeat(line, 100))
+	opts := Options{MaxReadBytes: 1000}
+	var offset int64
+	total := 0
+	for i := 0; i < 50; i++ {
+		res, err := Read(path, offset, opts)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		total += len(res.Lines)
+		if res.NextOffset == offset {
+			break
+		}
+		offset = res.NextOffset
+	}
+	if total != 100 {
+		t.Errorf("read %d lines, want 100", total)
+	}
+}
+
+func TestRead_ReportsSkippedAcrossBudgetBoundary(t *testing.T) {
+	// An oversized line that straddles the budget is skipped whole in one call.
+	content := "a\n" + strings.Repeat("x", 50) + "\nb\n"
+	path := writeFile(t, content)
+	res, err := Read(path, 0, Options{MaxLineSize: 10, MaxReadBytes: 10})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if res.Skipped != 1 {
+		t.Errorf("Skipped = %d, want 1", res.Skipped)
+	}
+	if !bytes.Equal(res.Lines[0], []byte("a")) {
+		t.Errorf("first line = %q", res.Lines[0])
 	}
 }
