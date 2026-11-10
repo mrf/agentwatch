@@ -5,11 +5,11 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
-	"net/url"
 	"sync"
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/mrf/agentwatch/internal/hostcheck"
 	"github.com/mrf/agentwatch/monitor"
 )
 
@@ -66,6 +66,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Host check (DNS rebinding). Before rate limiting so rebound requests,
+	// which arrive from loopback, cannot drain the loopback token bucket.
+	if !hostcheck.HostAllowed(r.Host, s.cfg.allowedHosts) {
+		http.Error(w, "host not allowed", http.StatusForbidden)
+		return
+	}
+
 	// Rate limit check.
 	if s.rateLimiter != nil {
 		decision := s.rateLimiter.Allow(clientAddress(r))
@@ -76,7 +83,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Origin check.
-	if !s.checkOrigin(r) {
+	if !hostcheck.OriginAllowed(r.Header.Get("Origin"), r.Host, s.cfg.allowedOrigins) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
@@ -212,75 +219,4 @@ func (s *Server) heartbeatLoop(c *conn, done chan struct{}) {
 			return
 		}
 	}
-}
-
-// checkOrigin validates the Origin header on a WebSocket upgrade request.
-// When allowedOrigins is configured, only those origins are accepted.
-// Otherwise, same-origin and localhost are allowed (plan §5 rule 5).
-func (s *Server) checkOrigin(r *http.Request) bool {
-	origin := r.Header.Get("Origin")
-
-	if len(s.cfg.allowedOrigins) > 0 {
-		return s.checkOriginAllowlist(origin)
-	}
-
-	// No allowlist — default: same-origin and localhost only.
-	if origin == "" {
-		return true
-	}
-
-	parsed, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-
-	host := parsed.Host
-	if host == "" {
-		return false
-	}
-
-	// Same-origin: origin host matches request host.
-	if host == r.Host {
-		return true
-	}
-
-	// Localhost development.
-	switch parsed.Hostname() {
-	case "localhost", "127.0.0.1", "::1":
-		return true
-	}
-
-	return false
-}
-
-// checkOriginAllowlist checks origin against the configured allowlist.
-// Matches by exact string or by host component.
-func (s *Server) checkOriginAllowlist(origin string) bool {
-	if origin == "" {
-		return false
-	}
-
-	// Fast path: exact match.
-	for i := 0; i < len(s.cfg.allowedOrigins); i++ {
-		if origin == s.cfg.allowedOrigins[i] {
-			return true
-		}
-	}
-
-	// Slow path: compare host components.
-	parsed, err := url.Parse(origin)
-	if err != nil {
-		return false
-	}
-	for i := 0; i < len(s.cfg.allowedOrigins); i++ {
-		allowedParsed, err := url.Parse(s.cfg.allowedOrigins[i])
-		if err != nil {
-			continue
-		}
-		if parsed.Host == allowedParsed.Host {
-			return true
-		}
-	}
-
-	return false
 }

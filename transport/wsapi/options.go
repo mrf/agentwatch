@@ -23,6 +23,7 @@ type Authenticator interface {
 type serverConfig struct {
 	authenticator  Authenticator
 	allowedOrigins []string
+	allowedHosts   []string
 	maxConnections int
 	heartbeat      time.Duration
 	sendBuffer     int
@@ -54,10 +55,22 @@ func WithAuthenticator(a Authenticator) Option {
 }
 
 // WithAllowedOrigins sets the allowed Origin header values for WebSocket upgrades.
-// When empty (the default), the server allows same-origin and localhost connections.
+// Origins match on scheme, host, and port. When empty (the default), the
+// server allows a missing Origin, same-origin, and localhost origins on any port.
 func WithAllowedOrigins(origins []string) Option {
 	return func(c *serverConfig) {
 		c.allowedOrigins = origins
+	}
+}
+
+// WithAllowedHosts adds Host header values the server accepts, beyond the
+// always-allowed localhost, 127.0.0.1, and [::1] on any port. An entry is a
+// hostname (any port) or host:port (exact). Requests with any other Host are
+// rejected with 403; this is the DNS-rebinding defense. Set it when serving
+// under a non-loopback name or address.
+func WithAllowedHosts(hosts []string) Option {
+	return func(c *serverConfig) {
+		c.allowedHosts = hosts
 	}
 }
 

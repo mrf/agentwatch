@@ -74,4 +74,5 @@ The transition table in the plan (§4.5) is a gate. If you need a new transition
 - Deep-clone methods on types that cross goroutine boundaries.
 - Sinks must return quickly. Long-running sinks wrap themselves in an async queue.
 - HTTP examples bind to `127.0.0.1` by default.
-- WebSocket origin defaults: same-origin and localhost only.
+- WebSocket origin defaults: same-origin and localhost only; origin allowlists match scheme+host+port.
+- Both transports validate `Host` (DNS rebinding): loopback names plus `WithAllowedHosts`, else 403. Shared logic lives in `internal/hostcheck`.
