@@ -432,9 +432,10 @@ Rules:
 2. `WorkingDir`, `Branch`, model names, session IDs, and source names are still potentially sensitive. Keep `session.PrivacyFilter`.
 3. Health errors exposed over HTTP/WS must be sanitized. Replace absolute paths with `<path>` and reduce panic details to `internal error`.
 4. HTTP examples bind to `127.0.0.1` by default.
-5. WebSocket origin defaults should allow same-origin and localhost development, not arbitrary remote origins.
+5. WebSocket origin defaults should allow same-origin and localhost development, not arbitrary remote origins. Configured origin allowlists match on scheme, host, and port.
 6. Auth is adapter-level. Core monitor has no auth concept.
 7. `LogPath` can exist in private tracked metadata but not in JSON output.
+8. Both HTTP and WS transports validate the `Host` header (DNS-rebinding defense): `localhost`, `127.0.0.1`, and `[::1]` on any port, plus hosts added with `WithAllowedHosts`. Anything else is rejected with 403. Same-origin is only meaningful after this check.
 
 The existing `backend/internal/session/privacy.go` in `agent-racer` is mostly generic, but it references fields that v1 removes (`PID`, `TmuxTarget`). Copy the idea and tests, not the file verbatim.
 
@@ -548,6 +549,9 @@ Because Gemini currently needs process inspection for path mapping, keep that lo
 package httpapi
 
 func NewHandler(mon *monitor.Monitor, opts ...Option) (http.Handler, error)
+
+func WithPolicy(p session.Policy) Option
+func WithAllowedHosts(hosts []string) Option
 ```
 
 Routes:
@@ -568,6 +572,7 @@ func NewServer(mon *monitor.Monitor, opts ...Option) (*Server, error)
 
 func WithAuthenticator(a Authenticator) Option
 func WithAllowedOrigins(origins []string) Option
+func WithAllowedHosts(hosts []string) Option
 func WithMaxConnections(n int) Option
 func WithHeartbeat(d time.Duration) Option
 

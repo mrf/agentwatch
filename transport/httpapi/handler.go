@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/mrf/agentwatch/internal/hostcheck"
 	"github.com/mrf/agentwatch/monitor"
 	"github.com/mrf/agentwatch/session"
 )
@@ -20,10 +21,22 @@ func WithPolicy(p session.Policy) Option {
 	}
 }
 
+// WithAllowedHosts adds Host header values the handler accepts, beyond the
+// always-allowed localhost, 127.0.0.1, and [::1] on any port. An entry is a
+// hostname (any port) or host:port (exact). Requests with any other Host are
+// rejected with 403; this is the DNS-rebinding defense. Set it when serving
+// under a non-loopback name or address.
+func WithAllowedHosts(hosts []string) Option {
+	return func(h *handler) {
+		h.allowedHosts = hosts
+	}
+}
+
 type handler struct {
-	mon    *monitor.Monitor
-	policy session.Policy
-	mux    *http.ServeMux
+	mon          *monitor.Monitor
+	policy       session.Policy
+	allowedHosts []string
+	mux          *http.ServeMux
 }
 
 // NewHandler returns an http.Handler that serves the agentwatch HTTP API.
@@ -35,6 +48,8 @@ type handler struct {
 //	GET /sources        — registered source names
 //
 // All responses are JSON with Content-Type: application/json.
+// Requests whose Host is not localhost, 127.0.0.1, [::1], or configured via
+// WithAllowedHosts are rejected with 403.
 // The optional privacy policy is applied to every session response.
 func NewHandler(mon *monitor.Monitor, opts ...Option) (http.Handler, error) {
 	h := &handler{
@@ -50,7 +65,17 @@ func NewHandler(mon *monitor.Monitor, opts ...Option) (http.Handler, error) {
 	h.mux.HandleFunc("GET /healthz", h.getHealthz)
 	h.mux.HandleFunc("GET /sources", h.getSources)
 
-	return h.mux, nil
+	return h, nil
+}
+
+// ServeHTTP rejects requests whose Host is not loopback or configured
+// (DNS rebinding), then dispatches to the route mux.
+func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if !hostcheck.HostAllowed(r.Host, h.allowedHosts) {
+		writeJSON(w, http.StatusForbidden, errorResponse{Error: "host not allowed"})
+		return
+	}
+	h.mux.ServeHTTP(w, r)
 }
 
 func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {

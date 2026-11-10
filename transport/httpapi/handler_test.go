@@ -3,8 +3,10 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -53,7 +55,7 @@ func TestHandler_ListSessions(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	r := newLocalRequest("/sessions", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -81,7 +83,7 @@ func TestHandler_GetSession(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/sessions/"+id, nil)
+	r := newLocalRequest("/sessions/"+id, nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -109,7 +111,7 @@ func TestHandler_GetSession_NotFound(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/sessions/does-not-exist", nil)
+	r := newLocalRequest("/sessions/does-not-exist", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -140,7 +142,7 @@ func TestHandler_Healthz_Empty(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r := newLocalRequest("/healthz", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -168,7 +170,7 @@ func TestHandler_Healthz_AfterPoll(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/healthz", nil)
+	r := newLocalRequest("/healthz", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -206,7 +208,7 @@ func TestHandler_Sources(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/sources", nil)
+	r := newLocalRequest("/sources", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -240,7 +242,7 @@ func TestHandler_PrivacyFilter_RedactsFields(t *testing.T) {
 	}
 
 	// Test via list endpoint.
-	r := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+	r := newLocalRequest("/sessions", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -263,7 +265,7 @@ func TestHandler_PrivacyFilter_RedactsFields(t *testing.T) {
 	}
 
 	// Test via single session endpoint — same policy applies.
-	r2 := httptest.NewRequest(http.MethodGet, "/sessions/"+id, nil)
+	r2 := newLocalRequest("/sessions/"+id, nil)
 	w2 := httptest.NewRecorder()
 	h.ServeHTTP(w2, r2)
 
@@ -283,7 +285,7 @@ func TestHandler_PrivacyFilter_PassthroughByDefault(t *testing.T) {
 		t.Fatalf("NewHandler: %v", err)
 	}
 
-	r := httptest.NewRequest(http.MethodGet, "/sessions/"+id, nil)
+	r := newLocalRequest("/sessions/"+id, nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
@@ -297,6 +299,76 @@ func TestHandler_PrivacyFilter_PassthroughByDefault(t *testing.T) {
 	if s.Model == "" {
 		t.Error("Model should not be redacted with default (zero) policy")
 	}
+}
+
+func TestHandler_Host_DNSRebindingRejected(t *testing.T) {
+	mon, _ := buildMonitor(t)
+	h, err := httpapi.NewHandler(mon)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	// DNS rebinding: the browser sends the attacker's hostname as Host.
+	r := httptest.NewRequest(http.MethodGet, "http://evil.example/sessions", nil)
+	r.Header.Set("Origin", "http://evil.example")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected 403, got %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), "test-model") {
+		t.Fatal("rejected response must not contain session data")
+	}
+}
+
+func TestHandler_Host_LocalhostAccepted(t *testing.T) {
+	mon, _ := buildMonitor(t)
+	h, err := httpapi.NewHandler(mon)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	hosts := []string{"localhost:8080", "127.0.0.1:8080", "[::1]:8080"}
+	for i := 0; i < len(hosts); i++ {
+		r := httptest.NewRequest(http.MethodGet, "/sessions", nil)
+		r.Host = hosts[i]
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("Host %q: expected 200, got %d", hosts[i], w.Code)
+		}
+	}
+}
+
+func TestHandler_Host_AllowedHostAccepted(t *testing.T) {
+	mon, _ := buildMonitor(t)
+	h, err := httpapi.NewHandler(mon, httpapi.WithAllowedHosts([]string{"agentwatch.lan"}))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	r := httptest.NewRequest(http.MethodGet, "http://agentwatch.lan:8080/sessions", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+
+	r = httptest.NewRequest(http.MethodGet, "http://evil.example/sessions", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("unconfigured host: expected 403, got %d", w.Code)
+	}
+}
+
+// newLocalRequest builds a GET request addressed to a loopback Host.
+// httptest.NewRequest defaults Host to example.com, which the handler rejects.
+func newLocalRequest(target string, body io.Reader) *http.Request {
+	r := httptest.NewRequest(http.MethodGet, target, body)
+	r.Host = "127.0.0.1:8080"
+	return r
 }
 
 func assertContentTypeJSON(t *testing.T, w *httptest.ResponseRecorder) {
