@@ -19,9 +19,9 @@ type Monitor struct {
 
 	mu      sync.Mutex
 	store   map[string]session.SessionState
-	cursors map[string]source.Cursor  // "source:sessionID" -> cursor
-	removed map[string]struct{}       // session IDs removed by retention sweep
-	health  map[string]*sourceHealth  // keyed by source name
+	cursors map[string]source.Cursor // "source:sessionID" -> cursor
+	removed map[string]struct{}      // session IDs removed by retention sweep
+	health  map[string]*sourceHealth // keyed by source name
 
 	seq atomic.Uint64
 }

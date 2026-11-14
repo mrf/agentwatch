@@ -56,10 +56,10 @@ func TestSessionState_CloneIndependence(t *testing.T) {
 	now := time.Now()
 	completed := now.Add(time.Hour)
 	original := session.SessionState{
-		ID:       "sess-1",
-		Source:   "claude",
-		Activity: session.ActivityWorking,
-		Lifecycle: session.LifecycleActive,
+		ID:          "sess-1",
+		Source:      "claude",
+		Activity:    session.ActivityWorking,
+		Lifecycle:   session.LifecycleActive,
 		CompletedAt: &completed,
 		Subagents: []session.SubagentState{
 			{
@@ -116,10 +116,10 @@ func TestSessionState_CloneEmptySubagents(t *testing.T) {
 func TestComputeContextUtilization(t *testing.T) {
 	t.Parallel()
 	cases := []struct {
-		name    string
-		tokens  int
-		max     int
-		want    float64
+		name   string
+		tokens int
+		max    int
+		want   float64
 	}{
 		{"zero max", 100, 0, 0},
 		{"negative max", 100, -1, 0},

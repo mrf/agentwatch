@@ -264,8 +264,8 @@ func TestServer_SlowClientEviction(t *testing.T) {
 	}
 
 	srv, ts := newTestServer(t, sessions,
-		wsapi.WithSendBuffer(1),                    // Minimal buffer — fills after 1 queued msg.
-		wsapi.WithWriteTimeout(time.Millisecond),   // Tiny timeout so writes fail once TCP buffer fills.
+		wsapi.WithSendBuffer(1),                  // Minimal buffer — fills after 1 queued msg.
+		wsapi.WithWriteTimeout(time.Millisecond), // Tiny timeout so writes fail once TCP buffer fills.
 	)
 
 	conn := dialWS(t, ts)

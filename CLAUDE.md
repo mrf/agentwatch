@@ -7,12 +7,13 @@ Go library for monitoring local AI coding agents. Extracted from `agent-racer` â
 Every change must pass before committing:
 
 ```bash
+test -z "$(gofmt -l .)"
 go vet ./...
 go test ./...
 go test -race ./...
 ```
 
-All three pass or it doesn't ship. No exceptions.
+All four pass or it doesn't ship. No exceptions.
 
 ## Strict TDD
 

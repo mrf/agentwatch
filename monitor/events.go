@@ -30,9 +30,9 @@ type Event struct {
 	At   time.Time `json:"at"`
 	Type EventType `json:"type"`
 
-	Sessions []session.SessionState  `json:"sessions,omitempty"`
-	Updates  []session.SessionState  `json:"updates,omitempty"`
-	Removed  []string                `json:"removed,omitempty"`
+	Sessions []session.SessionState `json:"sessions,omitempty"`
+	Updates  []session.SessionState `json:"updates,omitempty"`
+	Removed  []string               `json:"removed,omitempty"`
 
 	Lifecycle *session.LifecycleEvent `json:"lifecycle,omitempty"`
 	Health    *Health                 `json:"health,omitempty"`

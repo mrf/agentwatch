@@ -327,7 +327,7 @@ func TestConcurrentAccess(t *testing.T) {
 		go func() {
 			defer func() { done <- struct{}{} }()
 			for j := 0; j < 10; j++ {
-				s.Discover(ctx)               //nolint:errcheck
+				s.Discover(ctx)                    //nolint:errcheck
 				s.Parse(ctx, h, source.Cursor("")) //nolint:errcheck
 				s.DiscoverCallCount()
 				s.ParseCallCount()

@@ -157,17 +157,17 @@ func TestPollOnce_SingleSourceSingleSession(t *testing.T) {
 		{ID: "s1", Source: "claude", WorkingDir: "/project", StartedAt: started},
 	})
 	src.AddUpdate("s1", source.SourceUpdate{
-		SessionID:     "s1",
-		Activity:      session.ActivityWorking,
-		Model:         "opus",
-		ContextTokens: 1000,
-		MaxContextTokens: 200000,
-		WorkingDir:    "/project",
-		Branch:        "main",
-		LastActivityAt: clk.Now(),
+		SessionID:          "s1",
+		Activity:           session.ActivityWorking,
+		Model:              "opus",
+		ContextTokens:      1000,
+		MaxContextTokens:   200000,
+		WorkingDir:         "/project",
+		Branch:             "main",
+		LastActivityAt:     clk.Now(),
 		MessageCountDelta:  1,
 		ToolCallCountDelta: 2,
-		CurrentTool:   "bash",
+		CurrentTool:        "bash",
 	}, "c1")
 
 	sink := &recordingSink{}

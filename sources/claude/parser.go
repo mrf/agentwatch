@@ -36,7 +36,7 @@ type claudeMessage struct {
 // contentBlock is one element of message.content.
 type contentBlock struct {
 	Type      string `json:"type"`
-	Name      string `json:"name,omitempty"`       // set on tool_use blocks
+	Name      string `json:"name,omitempty"`        // set on tool_use blocks
 	ToolUseID string `json:"tool_use_id,omitempty"` // set on tool_result blocks
 }
 
@@ -100,8 +100,8 @@ type parseResult struct {
 	startedAt      time.Time
 	lastActivityAt time.Time
 
-	subagents  map[string]*subagentResult // keyed by toolUseID
-	parentMap  map[string]string          // parentToolUseID -> toolUseID (for cursor persistence)
+	subagents map[string]*subagentResult // keyed by toolUseID
+	parentMap map[string]string          // parentToolUseID -> toolUseID (for cursor persistence)
 
 	// hasData is true when at least one user or enriched assistant record was parsed.
 	hasData bool

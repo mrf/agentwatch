@@ -300,20 +300,20 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 	}
 
 	update := source.SourceUpdate{
-		SessionID:          sessionID,
-		Slug:               result.slug,
-		Activity:           result.activity,
-		Model:              result.model,
-		ContextTokens:      result.contextTokens,
-		OutputTokens:       result.outputTokens,
+		SessionID:            sessionID,
+		Slug:                 result.slug,
+		Activity:             result.activity,
+		Model:                result.model,
+		ContextTokens:        result.contextTokens,
+		OutputTokens:         result.outputTokens,
 		MessageCountDelta:    result.msgDelta,
 		ToolCallCountDelta:   result.toolDelta,
 		CompactionCountDelta: result.compactionDelta,
 		CurrentTool:          result.currentTool,
-		WorkingDir:         result.cwd,
-		Branch:             result.branch,
-		LastActivityAt:     result.lastActivityAt,
-		Subagents:          buildSubagentStates(result.subagents),
+		WorkingDir:           result.cwd,
+		Branch:               result.branch,
+		LastActivityAt:       result.lastActivityAt,
+		Subagents:            buildSubagentStates(result.subagents),
 	}
 	if !result.startedAt.IsZero() {
 		update.StartedAt = result.startedAt

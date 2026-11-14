@@ -1416,4 +1416,3 @@ func TestDecodeCursor_Corrupt(t *testing.T) {
 	}
 	_ = cc
 }
-

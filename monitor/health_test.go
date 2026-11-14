@@ -578,4 +578,3 @@ func assertHealthStatus(t *testing.T, m *monitor.Monitor, sourceName string, wan
 		t.Errorf("health[%q].Status = %q, want %q", sourceName, h.Status, want)
 	}
 }
-
