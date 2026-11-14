@@ -27,10 +27,8 @@ func HostAllowed(host string, allowed []string) bool {
 	if name == "" {
 		return false
 	}
-	for i := 0; i < len(loopbackHosts); i++ {
-		if name == loopbackHosts[i] {
-			return true
-		}
+	if isLoopback(name) {
+		return true
 	}
 	for i := 0; i < len(allowed); i++ {
 		allowedName, allowedPort := splitHost(allowed[i])
@@ -47,14 +45,16 @@ func HostAllowed(host string, allowed []string) bool {
 // OriginAllowed reports whether a request's Origin header is acceptable.
 //
 // With an empty allowlist, a missing Origin (non-browser client) is accepted,
-// as is an http(s) origin that is either same-origin with requestHost or a
-// loopback host on any port (local development). requestHost must already
-// have passed HostAllowed for the same-origin case to be meaningful.
+// as is an http(s) origin that is same-origin with requestHost or names a
+// loopback host on the server's own port, taken from requestHost (a portless
+// host means the scheme's default port). With anyLoopbackPort, loopback
+// origins on any port are accepted too (local dev servers). requestHost must
+// already have passed HostAllowed for these checks to be meaningful.
 //
 // With an allowlist, Origin must be present and match an entry on scheme,
 // host, and port; default ports (80 for http, 443 for https) are equivalent
-// to an omitted port.
-func OriginAllowed(origin, requestHost string, allowed []string) bool {
+// to an omitted port. anyLoopbackPort is ignored.
+func OriginAllowed(origin, requestHost string, allowed []string, anyLoopbackPort bool) bool {
 	if len(allowed) > 0 {
 		return originInAllowlist(origin, allowed)
 	}
@@ -68,7 +68,15 @@ func OriginAllowed(origin, requestHost string, allowed []string) bool {
 	if host == normalizeHostPort(scheme, requestHost) {
 		return true
 	}
-	return HostAllowed(host, nil)
+	name, port := splitHost(host)
+	if !isLoopback(name) {
+		return false
+	}
+	if anyLoopbackPort {
+		return true
+	}
+	_, requestPort := splitHost(requestHost)
+	return effectivePort(scheme, port) == effectivePort(scheme, requestPort)
 }
 
 func originInAllowlist(origin string, allowed []string) bool {
@@ -86,6 +94,29 @@ func originInAllowlist(origin string, allowed []string) bool {
 		}
 	}
 	return false
+}
+
+// isLoopback reports whether name (lower-cased, unbracketed) is a loopback
+// host name.
+func isLoopback(name string) bool {
+	for i := 0; i < len(loopbackHosts); i++ {
+		if name == loopbackHosts[i] {
+			return true
+		}
+	}
+	return false
+}
+
+// effectivePort returns port, or the scheme's default port when port is
+// empty.
+func effectivePort(scheme, port string) string {
+	if port != "" {
+		return port
+	}
+	if scheme == "https" {
+		return "443"
+	}
+	return "80"
 }
 
 // parseOrigin returns the lower-cased scheme and host[:port] of an origin,

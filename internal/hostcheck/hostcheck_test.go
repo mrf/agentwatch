@@ -53,8 +53,13 @@ func TestOriginAllowed_Default(t *testing.T) {
 	}{
 		{name: "no origin allowed for non-browser clients", origin: "", requestHost: "127.0.0.1:8080", want: true},
 		{name: "same origin", origin: "http://127.0.0.1:8080", requestHost: "127.0.0.1:8080", want: true},
-		{name: "localhost dev origin other port", origin: "http://localhost:3000", requestHost: "127.0.0.1:8080", want: true},
-		{name: "ipv6 loopback origin", origin: "http://[::1]:3000", requestHost: "127.0.0.1:8080", want: true},
+		{name: "loopback origin on server port", origin: "http://localhost:8080", requestHost: "127.0.0.1:8080", want: true},
+		{name: "ipv6 loopback origin on server port", origin: "http://[::1]:8080", requestHost: "localhost:8080", want: true},
+		{name: "loopback origin default port matches portless host", origin: "http://localhost", requestHost: "127.0.0.1", want: true},
+		{name: "loopback origin explicit default port", origin: "http://localhost:80", requestHost: "127.0.0.1", want: true},
+		{name: "localhost dev origin other port rejected", origin: "http://localhost:3000", requestHost: "127.0.0.1:8080", want: false},
+		{name: "ipv6 loopback origin other port rejected", origin: "http://[::1]:3000", requestHost: "127.0.0.1:8080", want: false},
+		{name: "loopback origin portless vs server port rejected", origin: "http://localhost", requestHost: "127.0.0.1:8080", want: false},
 		{name: "remote origin rejected", origin: "http://evil.example", requestHost: "127.0.0.1:8080", want: false},
 		{name: "opaque null origin rejected", origin: "null", requestHost: "127.0.0.1:8080", want: false},
 		{name: "unparseable origin rejected", origin: "http://%zz", requestHost: "127.0.0.1:8080", want: false},
@@ -62,8 +67,30 @@ func TestOriginAllowed_Default(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hostcheck.OriginAllowed(tt.origin, tt.requestHost, nil); got != tt.want {
-				t.Fatalf("OriginAllowed(%q, %q, nil) = %v, want %v", tt.origin, tt.requestHost, got, tt.want)
+			if got := hostcheck.OriginAllowed(tt.origin, tt.requestHost, nil, false); got != tt.want {
+				t.Fatalf("OriginAllowed(%q, %q, nil, false) = %v, want %v", tt.origin, tt.requestHost, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOriginAllowed_AnyLoopbackPort(t *testing.T) {
+	tests := []struct {
+		name   string
+		origin string
+		want   bool
+	}{
+		{name: "localhost dev origin other port", origin: "http://localhost:5173", want: true},
+		{name: "ipv6 loopback origin other port", origin: "http://[::1]:3000", want: true},
+		{name: "loopback origin on server port", origin: "http://127.0.0.1:8080", want: true},
+		{name: "no origin allowed for non-browser clients", origin: "", want: true},
+		{name: "remote origin still rejected", origin: "http://evil.example:5173", want: false},
+		{name: "non-http scheme still rejected", origin: "file://localhost", want: false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := hostcheck.OriginAllowed(tt.origin, "127.0.0.1:8080", nil, true); got != tt.want {
+				t.Fatalf("OriginAllowed(%q, nil, true) = %v, want %v", tt.origin, got, tt.want)
 			}
 		})
 	}
@@ -90,7 +117,7 @@ func TestOriginAllowed_Allowlist(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := hostcheck.OriginAllowed(tt.origin, "127.0.0.1:8080", allowed); got != tt.want {
+			if got := hostcheck.OriginAllowed(tt.origin, "127.0.0.1:8080", allowed, true); got != tt.want {
 				t.Fatalf("OriginAllowed(%q, allowlist) = %v, want %v", tt.origin, got, tt.want)
 			}
 		})

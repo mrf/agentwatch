@@ -62,7 +62,7 @@ The new WS server is a generic `monitor.EventSink` adapter with no racer-specifi
 |--------------------|----------------------|
 | Racer-specific WS message types | `monitor.Event` wrapped as JSON — no separate message types |
 | Auth baked in | Implement `wsapi.Authenticator` and pass via `wsapi.WithAuthenticator` |
-| Hardcoded origin policy | `wsapi.WithAllowedOrigins(origins)` |
+| Hardcoded origin policy | `wsapi.WithAllowedOrigins(origins)`; `wsapi.WithLocalhostOriginsAnyPort()` if a local dev server on another port connects to `/ws` |
 | Hardcoded rate limit | `wsapi.WithRateLimit(limit, burst, window)` |
 
 ### Privacy Filter

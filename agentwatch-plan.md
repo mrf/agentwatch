@@ -432,7 +432,7 @@ Rules:
 2. `WorkingDir`, `Branch`, model names, session IDs, and source names are still potentially sensitive. Keep `session.PrivacyFilter`.
 3. Health errors exposed over HTTP/WS must be sanitized. Replace absolute paths with `<path>` and reduce panic details to `internal error`.
 4. HTTP examples bind to `127.0.0.1` by default.
-5. WebSocket origin defaults should allow same-origin and localhost development, not arbitrary remote origins. Configured origin allowlists match on scheme, host, and port.
+5. WebSocket origin defaults allow a missing Origin, same-origin, and loopback origins (`localhost`, `127.0.0.1`, `[::1]`) on the server's own port only — not other local ports and not remote origins. `WithLocalhostOriginsAnyPort` opts into loopback origins on any port for local dev servers (e.g. Vite on :5173). Configured origin allowlists match on scheme, host, and port.
 6. Auth is adapter-level. Core monitor has no auth concept.
 7. `LogPath` can exist in private tracked metadata but not in JSON output.
 8. Both HTTP and WS transports validate the `Host` header (DNS-rebinding defense): `localhost`, `127.0.0.1`, and `[::1]` on any port, plus hosts added with `WithAllowedHosts`. Anything else is rejected with 403. Same-origin is only meaningful after this check.
@@ -572,6 +572,7 @@ func NewServer(mon *monitor.Monitor, opts ...Option) (*Server, error)
 
 func WithAuthenticator(a Authenticator) Option
 func WithAllowedOrigins(origins []string) Option
+func WithLocalhostOriginsAnyPort() Option
 func WithAllowedHosts(hosts []string) Option
 func WithMaxConnections(n int) Option
 func WithHeartbeat(d time.Duration) Option

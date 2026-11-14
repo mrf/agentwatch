@@ -23,18 +23,19 @@ type Authenticator interface {
 }
 
 type serverConfig struct {
-	authenticator  Authenticator
-	allowedOrigins []string
-	allowedHosts   []string
-	maxConnections int
-	heartbeat      time.Duration
-	sendBuffer     int
-	writeTimeout   time.Duration
-	rateLimit      int
-	rateBurst      int
-	rateWindow     time.Duration
-	logger         *slog.Logger
-	policy         session.Policy
+	authenticator           Authenticator
+	allowedOrigins          []string
+	localhostOriginsAnyPort bool
+	allowedHosts            []string
+	maxConnections          int
+	heartbeat               time.Duration
+	sendBuffer              int
+	writeTimeout            time.Duration
+	rateLimit               int
+	rateBurst               int
+	rateWindow              time.Duration
+	logger                  *slog.Logger
+	policy                  session.Policy
 }
 
 func defaultServerConfig() serverConfig {
@@ -59,10 +60,21 @@ func WithAuthenticator(a Authenticator) Option {
 
 // WithAllowedOrigins sets the allowed Origin header values for WebSocket upgrades.
 // Origins match on scheme, host, and port. When empty (the default), the
-// server allows a missing Origin, same-origin, and localhost origins on any port.
+// server allows a missing Origin, same-origin, and localhost, 127.0.0.1, or
+// [::1] origins on the server's own port (see WithLocalhostOriginsAnyPort).
 func WithAllowedOrigins(origins []string) Option {
 	return func(c *serverConfig) {
 		c.allowedOrigins = origins
+	}
+}
+
+// WithLocalhostOriginsAnyPort extends the default origin policy to accept
+// localhost, 127.0.0.1, and [::1] origins on any port, not just the server's
+// own. Use it when a local dev server on another port (e.g. Vite on :5173)
+// connects to /ws. It has no effect when WithAllowedOrigins is set.
+func WithLocalhostOriginsAnyPort() Option {
+	return func(c *serverConfig) {
+		c.localhostOriginsAnyPort = true
 	}
 }
 

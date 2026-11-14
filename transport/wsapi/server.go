@@ -83,7 +83,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Origin check.
-	if !hostcheck.OriginAllowed(r.Header.Get("Origin"), r.Host, s.cfg.allowedOrigins) {
+	if !hostcheck.OriginAllowed(r.Header.Get("Origin"), r.Host, s.cfg.allowedOrigins, s.cfg.localhostOriginsAnyPort) {
 		http.Error(w, "origin not allowed", http.StatusForbidden)
 		return
 	}
