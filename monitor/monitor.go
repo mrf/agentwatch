@@ -172,6 +172,14 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 
 			existing, existed := m.store[h.ID]
 
+			// A terminal marker for a session that is already terminal (e.g.
+			// consumed after the stale sweep) is not new activity: no
+			// transition in ADR 0005 covers it, so it must not resume.
+			if existed && existing.Lifecycle == session.LifecycleTerminal && update.Terminal {
+				m.mu.Unlock()
+				continue
+			}
+
 			var state session.SessionState
 			lcEvent := session.LifecycleEvent{
 				SessionID: h.ID,
