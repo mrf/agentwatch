@@ -178,13 +178,14 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	}
 
 	activity := session.ActivityIdle
-	if result.terminal {
+	switch {
+	case result.terminal:
 		activity = session.ActivityTerminal
-	} else if result.toolDelta > 0 {
+	case result.inProgress, result.lastRole == "user":
 		activity = session.ActivityWorking
-	} else if result.msgDelta > 0 && result.lastRole == "user" {
+	case result.replyDone:
 		activity = session.ActivityWaiting
-	} else if result.msgDelta > 0 {
+	case result.toolDelta > 0, result.msgDelta > 0:
 		activity = session.ActivityWorking
 	}
 

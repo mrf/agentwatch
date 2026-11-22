@@ -12,7 +12,7 @@ import (
 func TestCursorRoundTrip(t *testing.T) {
 	c := cursor{
 		msgCount: 42, toolCount: 7, tokensInput: 900, tokensOutput: 31,
-		lastActivity: 1768471800000000000, archive: archivePending, seen: true,
+		lastActivity: 1768471800000000000, archive: archivePending, working: true, seen: true,
 	}
 	encoded := encodeCursor(c)
 	decoded, err := decodeCursor(encoded)
@@ -35,7 +35,7 @@ func TestDecodeCursorEmpty(t *testing.T) {
 }
 
 func TestDecodeCursorInvalid(t *testing.T) {
-	cases := []string{"abc", "1", "1,2,3", "x,1", "1,x", "1,2,3,4,5,x", "1,2,3,4,5,3", "1,2,3,4,5,-1"}
+	cases := []string{"abc", "1", "1,2,3", "x,1", "1,x", "1,2,3,4,5,x", "1,2,3,4,5,3", "1,2,3,4,5,-1", "1,2,3,4,5,0,2", "1,2,3,4,5,0,x"}
 	for _, tc := range cases {
 		_, err := decodeCursor(tc)
 		if err == nil {

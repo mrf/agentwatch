@@ -277,8 +277,8 @@ func TestParseUserMessage(t *testing.T) {
 	}
 
 	assertInt(t, "MessageCountDelta", u.MessageCountDelta, 1)
-	if u.Activity != session.ActivityWaiting {
-		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWaiting)
+	if u.Activity != session.ActivityWorking {
+		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWorking)
 	}
 }
 
@@ -299,8 +299,8 @@ func TestParseAssistantMessage(t *testing.T) {
 	// contextTokens = 300 + 20 + 10 = 330
 	assertInt(t, "ContextTokens", u.ContextTokens, 330)
 	assertInt(t, "OutputTokens", u.OutputTokens, 80)
-	if u.Activity != session.ActivityWorking {
-		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWorking)
+	if u.Activity != session.ActivityWaiting {
+		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWaiting)
 	}
 }
 
