@@ -193,6 +193,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 		Slug:               result.slug,
 		Model:              result.model,
 		Activity:           activity,
+		HasTokens:          true,
 		ContextTokens:      result.tokensInput,
 		OutputTokens:       result.tokensOutput,
 		MessageCountDelta:  result.msgDelta,

@@ -88,6 +88,8 @@ type parseResult struct {
 	cwd       string
 	branch    string
 
+	// hasTokens is true when an assistant usage record set the token counts.
+	hasTokens     bool
 	contextTokens int
 	outputTokens  int
 
@@ -197,6 +199,7 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 
 			if rec.Message.Usage != nil {
 				u := rec.Message.Usage
+				r.hasTokens = true
 				r.contextTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
 				r.outputTokens = u.OutputTokens
 			}

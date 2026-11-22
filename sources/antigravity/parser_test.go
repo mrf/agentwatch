@@ -233,6 +233,9 @@ func TestParse_SimpleSession(t *testing.T) {
 	if update.ToolCallCountDelta != 0 {
 		t.Errorf("ToolCallCountDelta: got %d, want 0", update.ToolCallCountDelta)
 	}
+	if !update.HasTokens {
+		t.Error("HasTokens = false, want true (fixture has usageMetadata)")
+	}
 	if update.ContextTokens != 20 {
 		t.Errorf("ContextTokens: got %d, want 20", update.ContextTokens)
 	}

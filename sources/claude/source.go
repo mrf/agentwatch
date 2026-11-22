@@ -115,11 +115,6 @@ type claudeCursor struct {
 	Offset    int64                    `json:"offset"`
 	Parents   map[string]string        `json:"parents,omitempty"`   // parentToolUseID -> toolUseID
 	Subagents map[string]subagentEntry `json:"subagents,omitempty"` // subagent ID -> cumulative state
-
-	// The parent's last reported token counts, re-sent on subagent-only
-	// updates because the monitor overwrites tokens on every update.
-	ContextTokens int `json:"ctx,omitempty"`
-	OutputTokens  int `json:"out,omitempty"`
 }
 
 // ClaudeSource discovers and parses Claude Code JSONL session files.
@@ -130,6 +125,7 @@ type ClaudeSource struct {
 	window           time.Duration
 	sessionEndDir    string
 	maxEndMarkerSize int
+	contextWindows   map[string]int // overrides merged over defaultContextWindows
 
 	mu               sync.Mutex
 	pendingTerminals map[string]consumedMarker // session ID -> consumed marker
@@ -288,8 +284,10 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 			Slug:                 result.slug,
 			Activity:             result.activity,
 			Model:                result.model,
+			HasTokens:            result.hasTokens,
 			ContextTokens:        result.contextTokens,
 			OutputTokens:         result.outputTokens,
+			MaxContextTokens:     s.contextWindow(result.model),
 			MessageCountDelta:    result.msgDelta,
 			ToolCallCountDelta:   result.toolDelta,
 			CompactionCountDelta: result.compactionDelta,
@@ -301,15 +299,11 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 		if !result.startedAt.IsZero() {
 			update.StartedAt = result.startedAt
 		}
-		cc.ContextTokens = result.contextTokens
-		cc.OutputTokens = result.outputTokens
 	}
 
 	if len(touched) > 0 {
 		if update.SessionID == "" {
 			update.SessionID = h.ID
-			update.ContextTokens = cc.ContextTokens
-			update.OutputTokens = cc.OutputTokens
 		}
 		update.Subagents = cc.subagentStates(touched)
 	}
@@ -552,7 +546,7 @@ func absDuration(d time.Duration) time.Duration {
 // Falls back to a plain decimal offset string when only the offset is set
 // (for compact, backward-compatible output).
 func encodeCursor(cc claudeCursor) (source.Cursor, error) {
-	if len(cc.Parents) == 0 && len(cc.Subagents) == 0 && cc.ContextTokens == 0 && cc.OutputTokens == 0 {
+	if len(cc.Parents) == 0 && len(cc.Subagents) == 0 {
 		return source.Cursor(strconv.FormatInt(cc.Offset, 10)), nil
 	}
 	data, err := json.Marshal(cc)

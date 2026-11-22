@@ -65,6 +65,7 @@ type accumulator struct {
 	workingDir     string
 	activity       session.Activity
 	currentTool    string
+	hasTokens      bool
 	contextTokens  int
 	outputTokens   int
 	messageDelta   int
@@ -80,6 +81,7 @@ func (a *accumulator) toUpdate() source.SourceUpdate {
 		WorkingDir:         a.workingDir,
 		Activity:           a.activity,
 		CurrentTool:        a.currentTool,
+		HasTokens:          a.hasTokens,
 		ContextTokens:      a.contextTokens,
 		OutputTokens:       a.outputTokens,
 		MessageCountDelta:  a.messageDelta,
@@ -150,6 +152,7 @@ func parseMessage(raw json.RawMessage, a *accumulator) {
 			a.model = msg.Model
 		}
 		if msg.Usage != nil {
+			a.hasTokens = true
 			a.contextTokens = msg.Usage.Input + msg.Usage.CacheRead + msg.Usage.CacheWrite
 			a.outputTokens = msg.Usage.Output
 		}
