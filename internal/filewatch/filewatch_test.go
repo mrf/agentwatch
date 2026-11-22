@@ -422,3 +422,128 @@ func TestMultiplePatterns(t *testing.T) {
 		t.Errorf("got %d entries %v, want 2", len(entries), paths(entries))
 	}
 }
+
+const discoverTimeout = 5 * time.Second
+
+func newWalker(root string, follow bool) *filewatch.Walker {
+	return filewatch.New([]string{root},
+		filewatch.WithPattern("*.jsonl"),
+		filewatch.WithFollowSymlinks(follow),
+	)
+}
+
+func mustSymlink(t *testing.T, target, link string) {
+	t.Helper()
+	if err := os.Symlink(target, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+}
+
+// discoverBounded runs Discover under a deadline so a regression that loops
+// forever fails the test instead of hanging the suite.
+func discoverBounded(t *testing.T, w *filewatch.Walker) []filewatch.Entry {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), discoverTimeout)
+	defer cancel()
+
+	type result struct {
+		entries []filewatch.Entry
+		err     error
+	}
+	done := make(chan result, 1)
+	go func() {
+		entries, err := w.Discover(ctx)
+		done <- result{entries, err}
+	}()
+
+	select {
+	case r := <-done:
+		if r.err != nil {
+			t.Fatalf("Discover: %v", r.err)
+		}
+		return r.entries
+	case <-time.After(discoverTimeout + time.Second):
+		t.Fatal("Discover did not return: walk is not terminating")
+		return nil
+	}
+}
+
+func assertPaths(t *testing.T, got []filewatch.Entry, want []string) {
+	t.Helper()
+	sort.Strings(want)
+	gotPaths := paths(got)
+	if len(gotPaths) != len(want) {
+		t.Fatalf("paths = %v, want %v", gotPaths, want)
+	}
+	for i := 0; i < len(want); i++ {
+		if gotPaths[i] != want[i] {
+			t.Fatalf("paths = %v, want %v", gotPaths, want)
+		}
+	}
+}
+
+// TestSymlinkSelfLoopTerminates verifies that a followed symlink pointing at
+// one of its own ancestors does not recurse forever.
+func TestSymlinkSelfLoopTerminates(t *testing.T) {
+	root := makeTree(t, map[string]string{
+		"a.jsonl":     "{}\n",
+		"sub/b.jsonl": "{}\n",
+	})
+	mustSymlink(t, root, filepath.Join(root, "sub", "loop"))
+
+	got := discoverBounded(t, newWalker(root, true))
+
+	assertPaths(t, got, []string{
+		filepath.Join(root, "a.jsonl"),
+		filepath.Join(root, "sub", "b.jsonl"),
+	})
+}
+
+// TestSymlinkMutualLoopTerminates verifies termination when two directories
+// link to each other.
+func TestSymlinkMutualLoopTerminates(t *testing.T) {
+	root := makeTree(t, map[string]string{
+		"a/x.jsonl": "{}\n",
+		"b/y.jsonl": "{}\n",
+	})
+	mustSymlink(t, filepath.Join(root, "b"), filepath.Join(root, "a", "to-b"))
+	mustSymlink(t, filepath.Join(root, "a"), filepath.Join(root, "b", "to-a"))
+
+	got := discoverBounded(t, newWalker(root, true))
+
+	seen := map[string]bool{}
+	for _, p := range paths(got) {
+		seen[p] = true
+	}
+	for _, want := range []string{
+		filepath.Join(root, "a", "x.jsonl"),
+		filepath.Join(root, "b", "y.jsonl"),
+	} {
+		if !seen[want] {
+			t.Errorf("missing %s in %v", want, paths(got))
+		}
+	}
+}
+
+// TestSymlinkedRoot verifies that a root which is itself a symlink to a
+// directory is walked, and that new files are picked up on a rescan.
+func TestSymlinkedRoot(t *testing.T) {
+	real := makeTree(t, map[string]string{"a.jsonl": "{}\n"})
+	link := filepath.Join(t.TempDir(), "root-link")
+	mustSymlink(t, real, link)
+
+	w := newWalker(link, false)
+	assertPaths(t, discoverBounded(t, w), []string{filepath.Join(link, "a.jsonl")})
+
+	if err := os.WriteFile(filepath.Join(real, "b.jsonl"), []byte("{}\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Minute)
+	if err := os.Chtimes(real, future, future); err != nil {
+		t.Fatal(err)
+	}
+	assertPaths(t, discoverBounded(t, w), []string{
+		filepath.Join(link, "a.jsonl"),
+		filepath.Join(link, "b.jsonl"),
+	})
+}

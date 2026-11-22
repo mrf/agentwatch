@@ -115,7 +115,8 @@ func (w *Walker) Discover(ctx context.Context) ([]Entry, error) {
 }
 
 func (w *Walker) walkRoot(ctx context.Context, root string, now time.Time) ([]Entry, error) {
-	info, err := os.Lstat(root)
+	// Stat, not Lstat: a root that is itself a symlink to a directory is walked.
+	info, err := os.Stat(root)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil, nil
@@ -127,25 +128,36 @@ func (w *Walker) walkRoot(ctx context.Context, root string, now time.Time) ([]En
 	}
 
 	var results []Entry
-	if err := w.walkDir(ctx, root, now, &results); err != nil {
+	if err := w.walkDir(ctx, root, now, make(map[dirID]struct{}), &results); err != nil {
 		return nil, err
 	}
 	return results, nil
 }
 
 // walkDir recursively walks dir, appending matching files to results.
-func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, results *[]Entry) error {
+// ancestors holds the identity of every directory on the current walk path; a
+// directory that is already an ancestor (a symlink loop) is not walked again.
+func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancestors map[dirID]struct{}, results *[]Entry) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
-	info, err := os.Lstat(dir)
+	info, err := os.Stat(dir)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return nil
 		}
 		return err
 	}
+	id, ok := identify(dir, info)
+	if !ok {
+		return nil
+	}
+	if _, loop := ancestors[id]; loop {
+		return nil
+	}
+	ancestors[id] = struct{}{}
+	defer delete(ancestors, id)
 	dirMtime := info.ModTime()
 
 	w.mu.Lock()
@@ -163,7 +175,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, results
 		// this directory's mtime. Always recurse into known subdirectories so
 		// changes deep in the tree are not missed.
 		for _, sub := range snap.subdirs {
-			if err := w.walkDir(ctx, sub, now, results); err != nil {
+			if err := w.walkDir(ctx, sub, now, ancestors, results); err != nil {
 				return err
 			}
 		}
@@ -203,19 +215,19 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, results
 			if target.IsDir() {
 				if w.followSymlinks {
 					subdirs = append(subdirs, fullPath)
-					if err := w.walkDir(ctx, fullPath, now, results); err != nil {
+					if err := w.walkDir(ctx, fullPath, now, ancestors, results); err != nil {
 						return err
 					}
 				}
 				continue
 			}
-			w.collectFile(name, fullPath, target.ModTime(), now, &dirFiles, results)
+			w.collectFile(name, fullPath, target, now, &dirFiles, results)
 			continue
 		}
 
 		if de.IsDir() {
 			subdirs = append(subdirs, fullPath)
-			if err := w.walkDir(ctx, fullPath, now, results); err != nil {
+			if err := w.walkDir(ctx, fullPath, now, ancestors, results); err != nil {
 				return err
 			}
 			continue
@@ -225,7 +237,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, results
 		if statErr != nil {
 			continue
 		}
-		w.collectFile(name, fullPath, fi.ModTime(), now, &dirFiles, results)
+		w.collectFile(name, fullPath, fi, now, &dirFiles, results)
 	}
 
 	w.mu.Lock()
@@ -236,11 +248,14 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, results
 }
 
 // collectFile adds a file to the directory cache slice and, if it passes the
-// age filter, to the result set.
-func (w *Walker) collectFile(name, path string, mtime, now time.Time, dirFiles *[]Entry, results *[]Entry) {
-	if !w.matchesPattern(name) {
+// age filter, to the result set. Only regular files are collected: opening a
+// FIFO or device would block the poll. info must describe the file itself
+// (the symlink target for symlinks).
+func (w *Walker) collectFile(name, path string, info fs.FileInfo, now time.Time, dirFiles *[]Entry, results *[]Entry) {
+	if !info.Mode().IsRegular() || !w.matchesPattern(name) {
 		return
 	}
+	mtime := info.ModTime()
 	e := Entry{Path: path, ModTime: mtime}
 	*dirFiles = append(*dirFiles, e)
 	if w.passesAge(mtime, now) {
