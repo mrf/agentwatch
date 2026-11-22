@@ -16,9 +16,9 @@ const (
 	liveSessionID = "01234567-abcd-ef01-2345-67890abcdef0"
 
 	liveBatch1 = `{"timestamp":"2026-11-09T10:00:00.000Z","type":"session_meta","payload":{"id":"01234567-abcd-ef01-2345-67890abcdef0","timestamp":"2026-11-09T10:00:00.000Z"}}
-{"timestamp":"2026-11-09T10:00:01.000Z","type":"event_msg","payload":{"type":"user_message"}}
+{"timestamp":"2026-11-09T10:00:01.000Z","type":"response_item","payload":{"type":"message","role":"user"}}
 `
-	liveBatch2 = `{"timestamp":"2026-11-09T10:00:30.000Z","type":"event_msg","payload":{"type":"agent_message"}}
+	liveBatch2 = `{"timestamp":"2026-11-09T10:00:30.000Z","type":"response_item","payload":{"type":"message","role":"assistant"}}
 {"timestamp":"2026-11-09T10:00:31.000Z","type":"response_item","payload":{"type":"function_call","name":"shell"}}
 `
 	liveBatch3 = `{"timestamp":"2026-11-09T10:04:00.000Z","type":"event_msg","payload":{"type":"task_complete"}}

@@ -293,11 +293,11 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 			return
 		}
 		switch event.Type {
+		// Messages are counted from response_item only: real rollouts write
+		// each one to both streams, so counting here would double them.
 		case "user_message":
-			a.messageDelta++
 			a.activity = session.ActivityWaiting
 		case "agent_message":
-			a.messageDelta++
 			a.activity = session.ActivityWorking
 		case "agent_reasoning":
 			a.activity = session.ActivityWorking
@@ -410,6 +410,7 @@ func parseBareItem(line []byte, a *accumulator) {
 func parseResponseItem(payload json.RawMessage, a *accumulator) {
 	var item struct {
 		Type     string `json:"type"`
+		Role     string `json:"role"`
 		ToolName string `json:"tool_name"`
 		Name     string `json:"name"`
 	}
@@ -418,8 +419,12 @@ func parseResponseItem(payload json.RawMessage, a *accumulator) {
 	}
 	switch item.Type {
 	case "message":
-		a.messageDelta++
-		a.activity = session.ActivityWorking
+		// developer (and any other non-conversation) roles are injected
+		// instructions, not conversation turns.
+		if item.Role == "user" || item.Role == "assistant" {
+			a.messageDelta++
+			a.activity = session.ActivityWorking
+		}
 	case "reasoning":
 		a.activity = session.ActivityWorking
 	case "command_execution":

@@ -193,8 +193,8 @@ func TestParseInvalidCursor(t *testing.T) {
 // newEnvelopeFixture exercises the current rollout RolloutLine envelope format.
 const newEnvelopeFixture = `{"type":"session_meta","payload":{"id":"01234567-abcd-ef01-2345-67890abcdef0","model":"o4-mini","timestamp":"2026-01-30T10:00:00.000Z"}}
 {"type":"env_context","payload":{"cwd":"/home/user/project"}}
-{"type":"event_msg","payload":{"type":"user_message","payload":{"text":"fix the bug"}}}
-{"type":"event_msg","payload":{"type":"agent_message","payload":{"text":"on it"}}}
+{"type":"response_item","payload":{"type":"message","role":"user"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant"}}
 {"type":"response_item","payload":{"type":"command_execution","command":"grep -r TODO src/"}}
 {"type":"event_msg","payload":{"type":"token_count","payload":{"input_tokens":5000,"output_tokens":200,"model_context_window":128000}}}
 `
@@ -214,7 +214,7 @@ func TestParseNewEnvelopeFormat(t *testing.T) {
 	assertEqual(t, "Model", u.Model, "o4-mini")
 	// cwd from env_context
 	assertEqual(t, "WorkingDir", u.WorkingDir, "/home/user/project")
-	// 1 user_message + 1 agent_message
+	// 1 user + 1 assistant response_item message
 	assertInt(t, "MessageCountDelta", u.MessageCountDelta, 2)
 	// 1 command_execution
 	assertInt(t, "ToolCallCountDelta", u.ToolCallCountDelta, 1)
@@ -258,7 +258,7 @@ func TestParseTurnContext(t *testing.T) {
 
 func TestParseSessionConfiguredOverridesModel(t *testing.T) {
 	content := `{"type":"session_meta","payload":{"id":"sc-sess","model":"o3"}}
-{"type":"response_item","payload":{"type":"message","text":"hello"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","text":"hello"}}
 {"type":"event_msg","payload":{"type":"session_configured","payload":{"model":"o4-mini"}}}
 `
 	dir, h := writeRollout(t, "sc-sess", content)
@@ -285,9 +285,30 @@ func TestParseTaskStartedContextWindow(t *testing.T) {
 	assertInt(t, "MaxContextTokens", u.MaxContextTokens, 258400)
 }
 
+// TestParseDualMessageStreams covers real rollouts, which write every
+// user/assistant message twice (event_msg and response_item) and also carry
+// developer-role response_item messages. Only user/assistant response_item
+// messages count: 2 user + 2 assistant = 4.
+func TestParseDualMessageStreams(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "rollout_dual_message_streams.jsonl"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, h := writeRollout(t, "01234567-abcd-ef01-2345-67890abcdef0", string(data))
+	src := codex.New(codex.WithRoot(dir))
+
+	u, _, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	assertInt(t, "MessageCountDelta", u.MessageCountDelta, 4)
+	assertInt(t, "ToolCallCountDelta", u.ToolCallCountDelta, 1)
+	assertEqual(t, "Activity", string(u.Activity), string(session.ActivityWaiting))
+}
+
 func TestParseResponseItemVariants(t *testing.T) {
 	content := `{"type":"session_meta","payload":{"id":"ri-test","model":"o3"}}
-{"type":"response_item","payload":{"type":"message","text":"hello"}}
+{"type":"response_item","payload":{"type":"message","role":"assistant","text":"hello"}}
 {"type":"response_item","payload":{"type":"reasoning","text":"thinking"}}
 {"type":"response_item","payload":{"type":"web_search","query":"test"}}
 {"type":"response_item","payload":{"type":"file_change","path":"a.go"}}
