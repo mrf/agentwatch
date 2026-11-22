@@ -579,40 +579,52 @@ func decodeCursor(c source.Cursor) (claudeCursor, error) {
 	return cc, nil
 }
 
-// encodeProjectPath encodes an absolute path to the Claude Code project
-// directory naming scheme: replace "/" and "." with "-". The leading "/"
-// becomes a leading "-" (e.g. /home/user/proj → -home-user-proj, and
-// /p/.claude/wt → -p--claude-wt).
-func encodeProjectPath(path string) string {
-	return strings.NewReplacer("/", "-", ".", "-").Replace(filepath.Clean(path))
-}
-
 // decodeProjectPath reverses the encoding to recover the original working
 // directory path. The encoding is lossy: slash-to-dash means /home/my-user/proj
 // and /home/my/user-proj both encode to -home-my-user-proj. An empty segment
 // ("--") marks a dot-encoded component start (/.claude → --claude). This
 // function tries all candidate reconstructions and returns the first one that
 // exists on the current filesystem. Falls back to treating all dashes as
-// slashes when no verified path is found; callers must treat the result as a
+// separators when no verified path is found; callers must treat the result as a
 // guess and prefer the cwd recorded in the transcript.
+//
+// Windows paths encode every non-alphanumeric character as "-", so
+// C:\git\cc-plus is stored as "C--git-cc-plus" (drive letter, then "--" for
+// ":\"). Those decode to backslash-separated paths rooted at the drive.
 func decodeProjectPath(encoded string) string {
 	decoded, err := url.PathUnescape(encoded)
 	if err != nil {
 		decoded = encoded
 	}
 
-	if !strings.HasPrefix(decoded, "-") {
+	var root, sep, rest string
+	switch {
+	case strings.HasPrefix(decoded, "-"):
+		root, sep, rest = "/", "/", decoded[1:]
+	case isWindowsDriveEncoding(decoded):
+		root, sep, rest = decoded[:1]+`:\`, `\`, decoded[3:]
+	default:
 		return decoded
 	}
 
-	parts := dotMarkedParts(strings.Split(decoded[1:], "-")) // skip leading dash
+	parts := dotMarkedParts(strings.Split(rest, "-"))
 
-	if result := decodeTryPaths(parts); result != "" {
+	if result := decodeTryPaths(root, sep, parts); result != "" {
 		return result
 	}
 
-	// Fallback: treat all dashes as slashes.
-	return "/" + strings.Join(parts, "/")
+	// Fallback: treat all dashes as separators.
+	return root + strings.Join(parts, sep)
+}
+
+// isWindowsDriveEncoding reports whether name starts with an encoded Windows
+// drive root: an ASCII letter followed by "--" (from ":\").
+func isWindowsDriveEncoding(name string) bool {
+	if len(name) < 3 || name[1] != '-' || name[2] != '-' {
+		return false
+	}
+	c := name[0]
+	return ('a' <= c && c <= 'z') || ('A' <= c && c <= 'Z')
 }
 
 // dotMarkedParts folds each empty segment (an encoded "." immediately after a
@@ -637,10 +649,10 @@ func dotMarkedParts(parts []string) []string {
 }
 
 // decodeTryPaths iteratively builds candidate paths by choosing slash or
-// hyphen at each part boundary. Prunes candidates whose parent path does not
-// exist on the filesystem. Returns the first fully-existing path, or "" if
-// none is found.
-func decodeTryPaths(parts []string) string {
+// hyphen at each part boundary, joining components under root with sep. Prunes
+// candidates whose parent path does not exist on the filesystem. Returns the
+// first fully-existing path, or "" if none is found.
+func decodeTryPaths(root, sep string, parts []string) string {
 	if len(parts) == 0 {
 		return ""
 	}
@@ -660,7 +672,7 @@ func decodeTryPaths(parts []string) string {
 		return pathState{components: next}
 	}
 	statePath := func(s pathState) string {
-		return "/" + strings.Join(s.components, "/")
+		return root + strings.Join(s.components, sep)
 	}
 
 	parentExistsCache := make(map[string]bool)
@@ -670,7 +682,7 @@ func decodeTryPaths(parts []string) string {
 		if len(s.components) <= 1 {
 			return true
 		}
-		parent := "/" + strings.Join(s.components[:len(s.components)-1], "/")
+		parent := root + strings.Join(s.components[:len(s.components)-1], sep)
 		if exists, ok := parentExistsCache[parent]; ok {
 			return exists
 		}
