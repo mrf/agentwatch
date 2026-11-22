@@ -128,7 +128,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	s.sendSnapshot(c)
 
 	// Start write pump in background.
-	go s.writePump(c)
+	go s.writePump(c) //nolint:contextcheck // lifetime is bound to c.send closing, not the request context
 
 	// Cancelled when the read pump exits so the heartbeat stops with it.
 	ctx, cancel := context.WithCancel(r.Context())

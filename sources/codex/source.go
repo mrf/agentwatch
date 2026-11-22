@@ -30,6 +30,9 @@ import (
 	"github.com/mrf/agentwatch/source"
 )
 
+// eventToolCall is the event type shared by the envelope and bare-item parsers.
+const eventToolCall = "tool_call"
+
 // Source implements source.Source for OpenAI Codex CLI sessions.
 //
 // Codex CLI stores sessions at:
@@ -317,7 +320,7 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 			}
 		case "turn_started":
 			parseTurnContext(event.Payload, a)
-		case "tool_call":
+		case eventToolCall:
 			parseToolCall(event.Payload, a)
 		case "session_configured":
 			var cfg struct {
@@ -400,7 +403,7 @@ func parseBareItem(line []byte, a *accumulator) {
 		if t := firstNonEmpty(item.ToolName, item.Name); t != "" {
 			a.currentTool = t
 		}
-	case "tool_call":
+	case eventToolCall:
 		parseToolCall(line, a)
 	case "token_count":
 		parseTokenCountFlat(line, a)
@@ -451,7 +454,7 @@ func parseResponseItem(payload json.RawMessage, a *accumulator) {
 		if item.Name != "" {
 			a.currentTool = item.Name
 		}
-	case "tool_call":
+	case eventToolCall:
 		parseToolCall(payload, a)
 	}
 }

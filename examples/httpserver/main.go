@@ -166,6 +166,6 @@ func main() {
 	log.Printf("  GET  /ws            – WebSocket event stream")
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		log.Fatalf("ListenAndServe: %v", err)
+		log.Fatalf("ListenAndServe: %v", err) //nolint:gocritic // exitAfterDefer: deferred cancel only releases the signal context, process exit does the same
 	}
 }

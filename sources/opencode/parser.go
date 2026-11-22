@@ -257,14 +257,8 @@ func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur curso
 	}
 
 	// Compute deltas (clamp to zero for safety).
-	msgDelta := msgCount - cur.msgCount
-	if msgDelta < 0 {
-		msgDelta = 0
-	}
-	toolDelta := toolCount - cur.toolCount
-	if toolDelta < 0 {
-		toolDelta = 0
-	}
+	msgDelta := max(msgCount-cur.msgCount, 0)
+	toolDelta := max(toolCount-cur.toolCount, 0)
 
 	var archivedAt time.Time
 	terminal := s.timeArchived.Valid && s.timeArchived.String != ""

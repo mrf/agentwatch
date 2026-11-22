@@ -385,8 +385,7 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 
 	checkStruct := func(t *testing.T, typ reflect.Type, reviewed map[string]bool) {
 		t.Helper()
-		for i := 0; i < typ.NumField(); i++ {
-			f := typ.Field(i)
+		for f := range typ.Fields() {
 			if !f.IsExported() {
 				continue
 			}
@@ -397,6 +396,6 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 		}
 	}
 
-	checkStruct(t, reflect.TypeOf(session.SessionState{}), sessionStateReviewed)
-	checkStruct(t, reflect.TypeOf(session.SubagentState{}), subagentStateReviewed)
+	checkStruct(t, reflect.TypeFor[session.SessionState](), sessionStateReviewed)
+	checkStruct(t, reflect.TypeFor[session.SubagentState](), subagentStateReviewed)
 }

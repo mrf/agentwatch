@@ -14,6 +14,11 @@ import (
 	"strings"
 )
 
+const (
+	schemeHTTP  = "http"
+	schemeHTTPS = "https"
+)
+
 // loopbackHosts are always accepted, on any port.
 var loopbackHosts = []string{"localhost", "127.0.0.1", "::1"}
 
@@ -62,7 +67,7 @@ func OriginAllowed(origin, requestHost string, allowed []string, anyLoopbackPort
 		return true
 	}
 	scheme, host, ok := parseOrigin(origin)
-	if !ok || (scheme != "http" && scheme != "https") {
+	if !ok || (scheme != schemeHTTP && scheme != schemeHTTPS) {
 		return false
 	}
 	if host == normalizeHostPort(scheme, requestHost) {
@@ -113,7 +118,7 @@ func effectivePort(scheme, port string) string {
 	if port != "" {
 		return port
 	}
-	if scheme == "https" {
+	if scheme == schemeHTTPS {
 		return "443"
 	}
 	return "80"
@@ -137,9 +142,9 @@ func parseOrigin(origin string) (scheme, host string, ok bool) {
 func normalizeHostPort(scheme, host string) string {
 	host = strings.ToLower(host)
 	switch {
-	case scheme == "http" && strings.HasSuffix(host, ":80"):
+	case scheme == schemeHTTP && strings.HasSuffix(host, ":80"):
 		return strings.TrimSuffix(host, ":80")
-	case scheme == "https" && strings.HasSuffix(host, ":443"):
+	case scheme == schemeHTTPS && strings.HasSuffix(host, ":443"):
 		return strings.TrimSuffix(host, ":443")
 	}
 	return host
