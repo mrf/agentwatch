@@ -89,6 +89,12 @@ const (
 	// timestamp cleared so the caller falls back to the current time.
 	endMarkerTimestampSkew = time.Hour
 
+	// pendingTerminalTTL bounds how long a drained marker waits for its
+	// session to be parsed. A discovered session consumes it within a poll or
+	// two; one never parsed (outside the discover window, or another root's)
+	// would otherwise be held forever.
+	pendingTerminalTTL = time.Hour
+
 	// maxDecodePathCandidates bounds the filesystem path disambiguation search.
 	maxDecodePathCandidates = 4096
 )
@@ -107,8 +113,9 @@ type sessionEndMarker struct {
 
 // consumedMarker holds the validated data extracted from a session-end marker.
 type consumedMarker struct {
-	reason  string
-	endedAt time.Time
+	reason    string
+	endedAt   time.Time
+	drainedAt time.Time
 }
 
 // claudeCursor is the JSON-encoded cursor format for the ClaudeSource.
@@ -262,6 +269,7 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 			cc.putSubagent(id, entry)
 			touched[id] = struct{}{}
 		}
+		cc.pruneParents()
 	}
 	if reset || nextPos != cc.Position {
 		dirty = true
@@ -362,6 +370,12 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 	}
 	s.lastMarkerScan = now
 
+	for id, cm := range s.pendingTerminals {
+		if now.Sub(cm.drainedAt) >= pendingTerminalTTL {
+			delete(s.pendingTerminals, id)
+		}
+	}
+
 	names := s.listEndMarkerNames()
 
 	maxSize := int64(s.maxEndMarkerSize)
@@ -399,10 +413,12 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 			}
 		}
 
-		s.pendingTerminals[marker.SessionID] = consumedMarker{
-			reason:  marker.Reason,
-			endedAt: endedAt,
+		cm := consumedMarker{
+			reason:    marker.Reason,
+			endedAt:   endedAt,
+			drainedAt: now,
 		}
+		s.pendingTerminals[marker.SessionID] = cm
 
 		// Also index by the filename-based session ID (transcript path stem)
 		// in case the marker's session_id differs from the JSONL filename.
@@ -410,10 +426,7 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 			fileID := strings.TrimSuffix(filepath.Base(marker.TranscriptPath), ".jsonl")
 			if fileID != marker.SessionID {
 				if _, exists := s.pendingTerminals[fileID]; !exists {
-					s.pendingTerminals[fileID] = consumedMarker{
-						reason:  marker.Reason,
-						endedAt: endedAt,
-					}
+					s.pendingTerminals[fileID] = cm
 				}
 			}
 		}

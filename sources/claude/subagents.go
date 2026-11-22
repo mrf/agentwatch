@@ -204,6 +204,17 @@ func (cc *claudeCursor) knownParents() map[string]string {
 	return m
 }
 
+// pruneParents drops the links of completed subagents, which no later
+// tool_result can complete again, so the cursor does not grow with every
+// subagent the session has ever run.
+func (cc *claudeCursor) pruneParents() {
+	for parentID, id := range cc.Parents {
+		if cc.Subagents[id].State.Activity == session.ActivityTerminal {
+			delete(cc.Parents, parentID)
+		}
+	}
+}
+
 // subagentStates returns the cumulative states for ids, sorted by ID.
 func (cc *claudeCursor) subagentStates(ids map[string]struct{}) []session.SubagentState {
 	sorted := make([]string, 0, len(ids))
