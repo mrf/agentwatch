@@ -11,7 +11,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -21,6 +20,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mrf/agentwatch/internal/filewatch"
 	"github.com/mrf/agentwatch/internal/jsonl"
 	"github.com/mrf/agentwatch/source"
 )
@@ -125,7 +125,8 @@ type ClaudeSource struct {
 	window           time.Duration
 	sessionEndDir    string
 	maxEndMarkerSize int
-	contextWindows   map[string]int // overrides merged over defaultContextWindows
+	contextWindows   map[string]int    // overrides merged over defaultContextWindows
+	walker           *filewatch.Walker // nil when root is empty
 
 	mu               sync.Mutex
 	pendingTerminals map[string]consumedMarker // session ID -> consumed marker
@@ -139,6 +140,17 @@ func New(opts ...Option) (source.Source, error) {
 	}
 	for i := 0; i < len(opts); i++ {
 		opts[i](s)
+	}
+	if s.root != "" {
+		wopts := []filewatch.Option{
+			filewatch.WithPattern("*.jsonl"),
+			// Subagent transcripts are attached to their parent by Parse.
+			filewatch.WithSkipDir(func(path string) bool { return isSubagentsDir(s.root, path) }),
+		}
+		if s.window > 0 {
+			wopts = append(wopts, filewatch.WithMaxAge(s.window))
+		}
+		s.walker = filewatch.New([]string{s.root}, wopts...)
 	}
 	return s, nil
 }
@@ -165,54 +177,26 @@ func (s *ClaudeSource) Name() string { return "claude" }
 // files are appended to during a session — their mtime changes without
 // updating the parent directory's mtime.
 func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, error) {
-	if s.root == "" {
+	if s.walker == nil {
 		return nil, nil
 	}
+	entries, err := s.walker.Discover(ctx)
+	if err != nil {
+		return nil, err
+	}
 
-	now := time.Now()
-	var handles []source.SessionHandle
-	err := filepath.WalkDir(s.root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil // skip unreadable entries
-		}
-		if ctx.Err() != nil {
-			return ctx.Err()
-		}
-		if d.IsDir() && isSubagentsDir(s.root, path) {
-			return fs.SkipDir // attached to the parent by Parse
-		}
-		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
-			return nil
-		}
-
-		fi, ferr := d.Info()
-		if ferr != nil {
-			return nil // skip unreadable files
-		}
-
-		// Age filter: skip files not modified within the discover window.
-		if s.window > 0 && now.Sub(fi.ModTime()) > s.window {
-			return nil
-		}
-
-		id := strings.TrimSuffix(d.Name(), ".jsonl")
-
-		// Decode the project path from the parent directory name.
+	handles := make([]source.SessionHandle, 0, len(entries))
+	for i := 0; i < len(entries); i++ {
+		path := entries[i].Path
 		// Claude Code encodes the working directory as the project directory
 		// name by replacing "/" with "-" (e.g. /home/user/proj → -home-user-proj).
-		workingDir := decodeProjectPath(filepath.Base(filepath.Dir(path)))
-
 		handles = append(handles, source.SessionHandle{
-			ID:         id,
+			ID:         strings.TrimSuffix(filepath.Base(path), ".jsonl"),
 			Path:       path,
-			WorkingDir: workingDir,
+			WorkingDir: decodeProjectPath(filepath.Base(filepath.Dir(path))),
 			Source:     "claude",
-			StartedAt:  fi.ModTime(),
+			StartedAt:  entries[i].ModTime,
 		})
-		return nil
-	})
-	if err != nil && !os.IsNotExist(err) {
-		return nil, err
 	}
 	return handles, nil
 }

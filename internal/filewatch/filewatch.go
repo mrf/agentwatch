@@ -50,6 +50,15 @@ func WithFollowSymlinks(follow bool) Option {
 	}
 }
 
+// WithSkipDir registers a predicate called with the path of every directory
+// found below a root (never the root itself). Directories for which it returns
+// true are not descended into.
+func WithSkipDir(skip func(path string) bool) Option {
+	return func(w *Walker) {
+		w.skipDir = skip
+	}
+}
+
 // WithClock injects a clock function used to evaluate age windows. Intended
 // for testing; production callers should omit this option.
 func WithClock(clock func() time.Time) Option {
@@ -67,6 +76,7 @@ type Walker struct {
 	maxAge         time.Duration
 	followSymlinks bool
 	clock          func() time.Time
+	skipDir        func(path string) bool
 
 	mu       sync.Mutex
 	dirCache map[string]dirSnapshot
@@ -165,8 +175,16 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 	w.mu.Unlock()
 
 	if cached && snap.mtime.Equal(dirMtime) {
-		// Directory contents unchanged: use cached file list.
+		// Directory contents unchanged: use the cached file list, but re-stat
+		// each file. Appending to a file changes its mtime and not its
+		// directory's, so a cached mtime would age an active file out of the
+		// window. A file that vanished is dropped.
 		for _, e := range snap.files {
+			info, statErr := os.Stat(e.Path)
+			if statErr != nil || !info.Mode().IsRegular() {
+				continue
+			}
+			e.ModTime = info.ModTime()
 			if w.passesAge(e.ModTime, now) {
 				*results = append(*results, e)
 			}
@@ -213,7 +231,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 				continue
 			}
 			if target.IsDir() {
-				if w.followSymlinks {
+				if w.followSymlinks && !w.skips(fullPath) {
 					subdirs = append(subdirs, fullPath)
 					if err := w.walkDir(ctx, fullPath, now, ancestors, results); err != nil {
 						return err
@@ -226,6 +244,9 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 		}
 
 		if de.IsDir() {
+			if w.skips(fullPath) {
+				continue
+			}
 			subdirs = append(subdirs, fullPath)
 			if err := w.walkDir(ctx, fullPath, now, ancestors, results); err != nil {
 				return err
@@ -261,6 +282,11 @@ func (w *Walker) collectFile(name, path string, info fs.FileInfo, now time.Time,
 	if w.passesAge(mtime, now) {
 		*results = append(*results, e)
 	}
+}
+
+// skips reports whether the skip-dir hook rejects the subdirectory at path.
+func (w *Walker) skips(path string) bool {
+	return w.skipDir != nil && w.skipDir(path)
 }
 
 // matchesPattern reports whether name matches any of the configured patterns.
