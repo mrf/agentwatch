@@ -18,6 +18,7 @@ linters:
     - bodyclose
     - contextcheck
     - copyloopvar
+    - cyclop
     - durationcheck
     - err113
     - errchkjson
@@ -26,17 +27,21 @@ linters:
     - exhaustive
     - fatcontext
     - forcetypeassert
+    - funlen
     - gocheckcompilerdirectives
     - gochecksumtype
+    - gocognit
     - goconst
     - gocritic
     - gosec
     - gosmopolitan
+    - maintidx
     - makezero
     - misspell
     - modernize
     - musttag
     - nilerr
+    - nestif
     - nilnil
     - noctx
     - nolintlint
@@ -65,15 +70,26 @@ linters:
   #   depguard — opinionated style / need a per-repo policy this repo has not
   #   adopted. tagliatelle in particular would force JSON-tag renames on the
   #   public wire format.
-  #   cyclop, gocognit, gocyclo, funlen, nestif, maintidx — complexity
-  #   metrics; ~45 existing functions exceed the defaults and fixing them is
-  #   refactoring, not lint hygiene. Tracked as a separate ticket.
+  #   gocyclo — redundant with cyclop, which runs at a stricter threshold.
   #   intrange — CLAUDE.md design rule 8 mandates classic `for i := 0; ...`
   #   loops (modernize's rangeint is disabled below for the same reason).
   #   gochecknoglobals — package-level tables and test fixtures are
   #   idiomatic here; the handful of mutable globals are reviewed by hand.
 
   settings:
+    # Complexity thresholds are the golangci-lint defaults, stated explicitly
+    # so a future default change cannot silently loosen them.
+    cyclop:
+      max-complexity: 10
+    gocognit:
+      min-complexity: 30
+    funlen:
+      lines: 60
+      statements: 40
+    nestif:
+      min-complexity: 5
+    maintidx:
+      under: 20
     modernize:
       disable:
         - rangeint # CLAUDE.md design rule 8: no range-over-integer.
@@ -109,3 +125,11 @@ linters:
       - path: internal/testutil/
         linters:
           - thelper # helpers take `t testing.TB`; renaming to `tb` is churn.
+      - path: (_test\.go|internal/testutil/)
+        linters:
+          # Test scenarios are flat sequences of `if got != want { t.Error }`
+          # checks; each check is a branch, so cyclop/gocognit/funlen measure
+          # assertion count rather than logic. nestif and maintidx stay on.
+          - cyclop
+          - funlen
+          - gocognit
