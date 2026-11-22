@@ -27,7 +27,8 @@ const maxSubagentMetaSize = 64 << 10
 // subagents.
 type subagentEntry struct {
 	jsonl.Position
-	State session.SubagentState `json:"state"`
+	LastMessageID string                `json:"lastMessageId,omitempty"` // last counted assistant message.id
+	State         session.SubagentState `json:"state"`
 }
 
 // subagentMeta is the subset of agent-<id>.meta.json the source reads. The
@@ -104,6 +105,7 @@ func readSubagentFile(dir, name, id string, entry subagentEntry) (out subagentEn
 		// The file is re-read from the start. Only the counts
 		// accumulate; every other field is overwritten by the re-read.
 		entry.State.MessageCount, entry.State.ToolCallCount = 0, 0
+		entry.LastMessageID = ""
 		changed = true
 	}
 	advanced = next != entry.Position
@@ -113,7 +115,8 @@ func readSubagentFile(dir, name, id string, entry subagentEntry) (out subagentEn
 		entry.State.ParentID = readSubagentParentToolUseID(filepath.Join(dir, "agent-"+id+".meta.json"))
 	}
 
-	r := parseSubagentLines(res.Lines)
+	r := parseSubagentLines(res.Lines, entry.LastMessageID)
+	entry.LastMessageID = r.lastMsgID
 	if r.hasData || !r.lastActivityAt.IsZero() {
 		entry.State = accumulateSubagent(entry.State, fileSubagentBatch(id, r))
 		changed = true

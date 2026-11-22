@@ -126,8 +126,9 @@ type consumedMarker struct {
 // tool_result completion and subagent counts carry across parse calls.
 type claudeCursor struct {
 	jsonl.Position
-	Parents   map[string]string        `json:"parents,omitempty"`   // parentToolUseID -> toolUseID
-	Subagents map[string]subagentEntry `json:"subagents,omitempty"` // subagent ID -> cumulative state
+	LastMessageID string                   `json:"lastMessageId,omitempty"` // last counted assistant message.id
+	Parents       map[string]string        `json:"parents,omitempty"`       // parentToolUseID -> toolUseID
+	Subagents     map[string]subagentEntry `json:"subagents,omitempty"`     // subagent ID -> cumulative state
 }
 
 // Source discovers and parses Claude Code JSONL session files.
@@ -285,7 +286,8 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 // parseParentLines parses the parent transcript's new lines, folds the
 // subagents they report into cc, and adds those IDs to touched.
 func parseParentLines(lines [][]byte, cc *claudeCursor, touched map[string]struct{}) parseResult {
-	result := parseLinesWithParents(lines, cc.knownParents())
+	result := parseRecords(lines, cc.knownParents(), cc.LastMessageID, false)
+	cc.LastMessageID = result.lastMsgID
 	cc.Parents = mergeParents(cc.Parents, buildParentMap(result.subagents))
 	batch := buildSubagentStates(result.subagents)
 	for i := 0; i < len(batch); i++ {

@@ -26,7 +26,9 @@ This guide maps old types and patterns to their new equivalents.
 
 The public session state was slimmed significantly. All racer-specific and privacy-sensitive fields were removed.
 
-**Unchanged fields** (same name and semantics on `session.State`): `ID`, `Source`, `Slug`, `Activity`, `Model`, `WorkingDir`, `Branch`, `CurrentTool`, `ContextTokens`, `OutputTokens`, `MaxContextTokens`, `ContextUtilization`, `TokenEstimated`, `MessageCount`, `ToolCallCount`, `StartedAt`, `LastActivityAt`, `LastDataReceivedAt`, `CompletedAt`, `Subagents`.
+**Unchanged fields** (same name and semantics on `session.State`): `ID`, `Source`, `Slug`, `Activity`, `Model`, `WorkingDir`, `Branch`, `CurrentTool`, `ContextTokens`, `OutputTokens`, `MaxContextTokens`, `ContextUtilization`, `TokenEstimated`, `ToolCallCount`, `StartedAt`, `LastActivityAt`, `LastDataReceivedAt`, `CompletedAt`, `Subagents`.
+
+**Changed semantics:** `MessageCount` on Claude sessions counts assistant messages, not content-block records. Records sharing a `message.id` count once, where agent-racer counted each record (about 2x too high).
 
 **Removed fields:**
 
