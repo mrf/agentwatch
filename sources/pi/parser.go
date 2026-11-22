@@ -37,10 +37,10 @@ type agentMessage struct {
 	Role string `json:"role"`
 
 	// AssistantMessage fields
-	Provider   string      `json:"provider,omitempty"`
-	Model      string      `json:"model,omitempty"`
-	Usage      *tokenUsage `json:"usage,omitempty"`
-	StopReason string      `json:"stopReason,omitempty"`
+	Provider   string          `json:"provider,omitempty"`
+	Model      string          `json:"model,omitempty"`
+	Usage      json.RawMessage `json:"usage,omitempty"`
+	StopReason string          `json:"stopReason,omitempty"`
 
 	// ToolResultMessage fields
 	ToolCallID string `json:"toolCallId,omitempty"`
@@ -52,13 +52,14 @@ type agentMessage struct {
 	ExitCode int    `json:"exitCode,omitempty"`
 }
 
-// tokenUsage holds per-turn token counts from Pi sessions.
+// tokenUsage holds per-turn token counts from Pi sessions. Pi's self-reported
+// "cost" (a number in older files, an object in current ones) is deliberately
+// not decoded.
 type tokenUsage struct {
-	Input      int     `json:"input"`
-	Output     int     `json:"output"`
-	CacheRead  int     `json:"cacheRead,omitempty"`
-	CacheWrite int     `json:"cacheWrite,omitempty"`
-	Cost       float64 `json:"cost,omitempty"`
+	Input      int `json:"input"`
+	Output     int `json:"output"`
+	CacheRead  int `json:"cacheRead,omitempty"`
+	CacheWrite int `json:"cacheWrite,omitempty"`
 }
 
 // accumulator collects incremental fields from JSONL lines.
@@ -160,10 +161,13 @@ func parseMessage(raw json.RawMessage, a *accumulator) {
 		if msg.Model != "" {
 			a.model = msg.Model
 		}
-		if msg.Usage != nil {
+		// Usage is decoded separately so an unreadable usage object costs
+		// only the token counts, not the whole message.
+		var usage tokenUsage
+		if len(msg.Usage) > 0 && json.Unmarshal(msg.Usage, &usage) == nil {
 			a.hasTokens = true
-			a.contextTokens = msg.Usage.Input + msg.Usage.CacheRead + msg.Usage.CacheWrite
-			a.outputTokens = msg.Usage.Output
+			a.contextTokens = usage.Input + usage.CacheRead + usage.CacheWrite
+			a.outputTokens = usage.Output
 		}
 
 	case "toolResult":
