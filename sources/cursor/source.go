@@ -16,7 +16,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -125,22 +124,20 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	return handles, nil
 }
 
-// Parse implements source.Source. The cursor is the byte offset into the
-// transcript file as a decimal string. An empty cursor means start from zero.
+// Parse implements source.Source. The cursor is a jsonl.Position in the
+// transcript file; an empty cursor means start from zero. If the file was
+// truncated or replaced, it is re-read from the start as a Reset update.
 func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
-	var offset int64
-	if c != "" {
-		var err error
-		offset, err = strconv.ParseInt(string(c), 10, 64)
-		if err != nil {
-			return source.SourceUpdate{}, c, fmt.Errorf("cursor: invalid cursor %q: %w", c, err)
-		}
+	pos, err := jsonl.ParsePosition(string(c))
+	if err != nil {
+		return source.SourceUpdate{}, c, fmt.Errorf("cursor: invalid cursor %q: %w", c, err)
 	}
 
-	lines, nextOffset, err := jsonl.ReadLines(h.Path, offset, jsonl.Options{})
+	res, nextPos, reset, err := jsonl.ReadFrom(h.Path, pos, jsonl.Options{})
 	if err != nil {
 		return source.SourceUpdate{}, c, fmt.Errorf("cursor: read %s: %w", h.Path, err)
 	}
+	lines := res.Lines
 
 	var acc accumulator
 	for i := 0; i < len(lines); i++ {
@@ -149,16 +146,16 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 
 	update := acc.toUpdate()
 	update.WorkingDir = h.WorkingDir
-	if len(lines) > 0 {
+	if len(lines) > 0 || reset {
 		update.SessionID = h.ID
+		update.Reset = reset
 		// Transcript lines carry no timestamps; the file's mtime is the only
 		// activity signal. A failed stat just leaves LastActivityAt unset.
 		if fi, statErr := os.Stat(h.Path); statErr == nil {
 			update.LastActivityAt = fi.ModTime()
 		}
 	}
-	next := source.Cursor(strconv.FormatInt(nextOffset, 10))
-	return update, next, nil
+	return update, source.Cursor(nextPos.Encode()), nil
 }
 
 // parseTranscriptPath extracts the session ID and working directory from a

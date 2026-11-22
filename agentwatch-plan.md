@@ -184,7 +184,8 @@ type SourceUpdate struct {
 Rules:
 
 - The monitor treats `Cursor` as opaque. It stores and returns it to the source but never parses or compares it.
-- File-tail sources may encode byte offsets as decimal strings.
+- File-tail sources may encode byte offsets as decimal strings. The JSONL sources encode a `jsonl.Position` (offset plus device/inode where available and a hash of the file's leading bytes) so a truncated, rewritten or replaced file is detected rather than read from past EOF or mid-line.
+- When a source has to start over (its file was truncated or replaced, or its cursor is unreadable), it re-reads from the beginning and sets `SourceUpdate.Reset`. The count deltas in that update are absolute and replace the session's counts, and its `Subagents` replaces the subagent list, so a re-read never double-counts.
 - Rewrite-on-save sources may encode mtimes, hashes, or source-specific JSON.
 - Source-specific continuity, such as Claude subagent parent maps, belongs inside the source or cursor. It should not leak into `SessionHandle`.
 - `context.Context` is required on blocking methods.

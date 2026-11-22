@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrf/agentwatch/internal/jsonl"
 	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/source"
 )
@@ -1356,30 +1357,43 @@ func TestDecodeProjectPath_RoundTrip(t *testing.T) {
 
 // --- Cursor encoding/decoding tests ---
 
-func TestEncodeDecode_PlainOffset(t *testing.T) {
-	cc := claudeCursor{Offset: 12345}
+func TestEncodeDecode_PositionRoundTrip(t *testing.T) {
+	cc := claudeCursor{Position: jsonl.Position{Offset: 12345, Ino: 7, HeadLen: 4096, HeadSum: 42}}
 	c, err := encodeCursor(cc)
 	if err != nil {
 		t.Fatalf("encodeCursor: %v", err)
 	}
-	// Without parents, should encode as plain integer.
-	if string(c) != "12345" {
-		t.Errorf("expected plain integer cursor, got %q", c)
-	}
-
 	cc2, err := decodeCursor(c)
 	if err != nil {
 		t.Fatalf("decodeCursor: %v", err)
 	}
-	if cc2.Offset != 12345 {
-		t.Errorf("offset: got %d, want 12345", cc2.Offset)
+	if cc2.Position != cc.Position {
+		t.Errorf("position: got %+v, want %+v", cc2.Position, cc.Position)
+	}
+}
+
+func TestDecodeCursor_LegacyPlainOffset(t *testing.T) {
+	cc, err := decodeCursor("12345")
+	if err != nil {
+		t.Fatalf("decodeCursor: %v", err)
+	}
+	if cc.Position != (jsonl.Position{Offset: 12345}) {
+		t.Errorf("position: got %+v, want offset 12345 with no identity", cc.Position)
+	}
+}
+
+func TestDecodeCursor_NegativeOffsetIsCorrupt(t *testing.T) {
+	for _, c := range []source.Cursor{"-1", `{"offset":-1}`, `{"subagents":{"a":{"offset":-1,"state":{}}}}`} {
+		if _, err := decodeCursor(c); err == nil {
+			t.Errorf("decodeCursor(%q): expected error", c)
+		}
 	}
 }
 
 func TestEncodeDecode_WithParents(t *testing.T) {
 	cc := claudeCursor{
-		Offset:  99,
-		Parents: map[string]string{"parent-id": "sub-id"},
+		Position: jsonl.Position{Offset: 99},
+		Parents:  map[string]string{"parent-id": "sub-id"},
 	}
 	c, err := encodeCursor(cc)
 	if err != nil {

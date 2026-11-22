@@ -110,10 +110,10 @@ type consumedMarker struct {
 }
 
 // claudeCursor is the JSON-encoded cursor format for the ClaudeSource.
-// It persists the file byte offset plus cross-batch subagent state, so that
+// It persists the file read position plus cross-batch subagent state, so that
 // tool_result completion and subagent counts carry across parse calls.
 type claudeCursor struct {
-	Offset    int64                    `json:"offset"`
+	jsonl.Position
 	Parents   map[string]string        `json:"parents,omitempty"`   // parentToolUseID -> toolUseID
 	Subagents map[string]subagentEntry `json:"subagents,omitempty"` // subagent ID -> cumulative state
 }
@@ -203,8 +203,10 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 }
 
 // Parse reads new JSONL lines from the session file starting at cursor c and
-// returns an incremental SourceUpdate. The cursor encodes a byte offset plus
-// cumulative subagent state; an empty cursor starts from the beginning.
+// returns an incremental SourceUpdate. The cursor encodes a jsonl.Position
+// plus cumulative subagent state; an empty cursor starts from the beginning.
+// A corrupt cursor, or a transcript truncated or replaced since the cursor
+// was taken, is re-read from the beginning as a Reset update.
 //
 // Subagent transcripts under <session-id>/subagents/ are read on every call
 // and reported in Subagents (cumulative, only those that changed). A change
@@ -221,14 +223,20 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 	}
 
 	cc, err := decodeCursor(c)
-	if err != nil {
-		cc = claudeCursor{} // reset on corrupt cursor
+	reset := err != nil
+	if reset {
+		cc = claudeCursor{}
 	}
 
-	lines, nextOffset, err := jsonl.ReadLines(h.Path, cc.Offset, jsonl.Options{})
+	res, nextPos, rewritten, err := jsonl.ReadFrom(h.Path, cc.Position, jsonl.Options{})
 	if err != nil {
 		return source.SourceUpdate{}, c, err
 	}
+	if rewritten {
+		// The subagent state was derived from the old file too.
+		cc, reset = claudeCursor{}, true
+	}
+	lines := res.Lines
 
 	// Drain end markers from the configured directory. This populates
 	// s.pendingTerminals for all sessions found, not just this one.
@@ -253,10 +261,10 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 			touched[id] = struct{}{}
 		}
 	}
-	if nextOffset != cc.Offset {
+	if reset || nextPos != cc.Position {
 		dirty = true
 	}
-	cc.Offset = nextOffset
+	cc.Position = nextPos
 
 	var update source.SourceUpdate
 	if result.hasData {
@@ -299,6 +307,11 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 			update.SessionID = h.ID
 		}
 		update.Subagents = cc.subagentStates(touched)
+	}
+
+	if reset {
+		update.SessionID = cmp.Or(update.SessionID, h.ID)
+		update.Reset = true
 	}
 
 	// Keyed by the handle, never by the records' sessionId: subagent
@@ -536,12 +549,7 @@ func absDuration(d time.Duration) time.Duration {
 }
 
 // encodeCursor converts a claudeCursor to an opaque source.Cursor string.
-// Falls back to a plain decimal offset string when only the offset is set
-// (for compact, backward-compatible output).
 func encodeCursor(cc claudeCursor) (source.Cursor, error) {
-	if len(cc.Parents) == 0 && len(cc.Subagents) == 0 {
-		return source.Cursor(strconv.FormatInt(cc.Offset, 10)), nil
-	}
 	data, err := json.Marshal(cc)
 	if err != nil {
 		return source.Cursor(strconv.FormatInt(cc.Offset, 10)), err
@@ -549,22 +557,26 @@ func encodeCursor(cc claudeCursor) (source.Cursor, error) {
 	return source.Cursor(data), nil
 }
 
-// decodeCursor parses an opaque cursor into a claudeCursor.
-// Accepts both the plain decimal offset format (legacy / no subagents) and the
-// JSON format (subagent parent map present).
+// decodeCursor parses an opaque cursor into a claudeCursor. It also accepts
+// the legacy plain decimal offset, which carries no file identity.
 func decodeCursor(c source.Cursor) (claudeCursor, error) {
 	if c == "" {
 		return claudeCursor{}, nil
 	}
 	s := string(c)
-	// Fast path: plain integer (decimal byte offset from single-format cursors).
-	if offset, err := strconv.ParseInt(s, 10, 64); err == nil {
-		return claudeCursor{Offset: offset}, nil
-	}
-	// JSON path: full cursor with parents map.
 	var cc claudeCursor
-	if err := json.Unmarshal([]byte(s), &cc); err != nil {
+	if offset, err := strconv.ParseInt(s, 10, 64); err == nil {
+		cc.Offset = offset
+	} else if err := json.Unmarshal([]byte(s), &cc); err != nil {
 		return claudeCursor{}, fmt.Errorf("decode cursor: %w", err)
+	}
+	if err := cc.Validate(); err != nil {
+		return claudeCursor{}, fmt.Errorf("decode cursor: %w", err)
+	}
+	for id, e := range cc.Subagents {
+		if err := e.Validate(); err != nil {
+			return claudeCursor{}, fmt.Errorf("decode cursor: subagent %s: %w", id, err)
+		}
 	}
 	return cc, nil
 }

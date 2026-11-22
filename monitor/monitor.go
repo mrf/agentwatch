@@ -470,7 +470,8 @@ func (m *Monitor) Health() map[string]Health {
 }
 
 // applyUpdate merges a SourceUpdate into a SessionState.
-// Delta fields (MessageCountDelta, ToolCallCountDelta) are accumulated.
+// Delta fields (MessageCountDelta, ToolCallCountDelta) are accumulated,
+// or replace the counts when u.Reset is set.
 // Current-state fields are overwritten when the source provides a value.
 // startFromContent reports whether state.StartedAt already came from source
 // content rather than the Discover-time handle.
@@ -499,9 +500,16 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 		state.ContextTokens, state.MaxContextTokens,
 	)
 
-	state.MessageCount += u.MessageCountDelta
-	state.ToolCallCount += u.ToolCallCountDelta
-	state.CompactionCount += u.CompactionCountDelta
+	if u.Reset {
+		state.MessageCount = u.MessageCountDelta
+		state.ToolCallCount = u.ToolCallCountDelta
+		state.CompactionCount = u.CompactionCountDelta
+		state.Subagents = mergeSubagents(nil, u.Subagents)
+	} else {
+		state.MessageCount += u.MessageCountDelta
+		state.ToolCallCount += u.ToolCallCountDelta
+		state.CompactionCount += u.CompactionCountDelta
+	}
 
 	if u.CurrentTool != "" {
 		state.CurrentTool = u.CurrentTool
@@ -518,7 +526,7 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 	}
 	state.LastDataReceivedAt = now
 
-	if len(u.Subagents) > 0 {
+	if !u.Reset && len(u.Subagents) > 0 {
 		state.Subagents = mergeSubagents(state.Subagents, u.Subagents)
 	}
 

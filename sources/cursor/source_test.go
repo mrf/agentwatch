@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mrf/agentwatch/internal/jsonl"
 	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/source"
 	"github.com/mrf/agentwatch/sources/cursor"
@@ -245,8 +246,8 @@ func TestParseEmptyFile(t *testing.T) {
 	if u.MessageCountDelta != 0 {
 		t.Errorf("MessageCountDelta = %d, want 0", u.MessageCountDelta)
 	}
-	if c != "0" {
-		t.Errorf("cursor = %q, want %q", c, "0")
+	if pos, err := jsonl.ParsePosition(string(c)); err != nil || pos.Offset != 0 {
+		t.Errorf("cursor = %q (err %v), want offset 0", c, err)
 	}
 }
 

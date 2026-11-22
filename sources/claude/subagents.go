@@ -21,11 +21,12 @@ const subagentsDirName = "subagents"
 const maxSubagentMetaSize = 64 << 10
 
 // subagentEntry is the per-subagent state carried in the cursor. State is
-// cumulative across polls; Offset is the read position in the subagent's own
-// file and stays zero for progress-tracked (pre-subagents/ layout) subagents.
+// cumulative across polls; Position is the read position in the subagent's
+// own file and stays zero for progress-tracked (pre-subagents/ layout)
+// subagents.
 type subagentEntry struct {
-	Offset int64                 `json:"offset,omitempty"`
-	State  session.SubagentState `json:"state"`
+	jsonl.Position
+	State session.SubagentState `json:"state"`
 }
 
 // subagentMeta is the subset of agent-<id>.meta.json the source reads. The
@@ -76,14 +77,21 @@ func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]
 			continue
 		}
 		entry := cc.Subagents[id]
-		lines, next, err := jsonl.ReadLines(filepath.Join(dir, de.Name()), entry.Offset, jsonl.Options{})
+		res, next, reset, err := jsonl.ReadFrom(filepath.Join(dir, de.Name()), entry.Position, jsonl.Options{})
 		if err != nil {
 			continue
 		}
-		if next != entry.Offset {
+		if reset {
+			// The file is re-read from the start. Only the counts
+			// accumulate; every other field is overwritten by the re-read.
+			entry.State.MessageCount, entry.State.ToolCallCount = 0, 0
+			touched[id] = struct{}{}
+		}
+		if next != entry.Position {
 			advanced = true
 		}
-		entry.Offset = next
+		entry.Position = next
+		lines := res.Lines
 		entry.State.ID = id
 		if entry.State.ParentID == "" {
 			entry.State.ParentID = readSubagentParentToolUseID(filepath.Join(dir, "agent-"+id+".meta.json"))

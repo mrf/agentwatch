@@ -20,7 +20,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -127,30 +126,29 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	return handles, nil
 }
 
-// Parse implements source.Source. The cursor is the byte offset into the
-// rollout file as a decimal string. An empty cursor means start from zero.
+// Parse implements source.Source. The cursor is a jsonl.Position in the
+// rollout file; an empty cursor means start from zero. If the file was
+// truncated or replaced, it is re-read from the start as a Reset update.
 func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
-	var offset int64
-	if c != "" {
-		var err error
-		offset, err = strconv.ParseInt(string(c), 10, 64)
-		if err != nil {
-			return source.SourceUpdate{}, c, fmt.Errorf("codex: invalid cursor %q: %w", c, err)
-		}
+	pos, err := jsonl.ParsePosition(string(c))
+	if err != nil {
+		return source.SourceUpdate{}, c, fmt.Errorf("codex: invalid cursor %q: %w", c, err)
 	}
 
-	lines, nextOffset, err := jsonl.ReadLines(h.Path, offset, jsonl.Options{})
+	res, nextPos, reset, err := jsonl.ReadFrom(h.Path, pos, jsonl.Options{})
 	if err != nil {
 		return source.SourceUpdate{}, c, fmt.Errorf("codex: read %s: %w", h.Path, err)
 	}
+	lines := res.Lines
+	next := source.Cursor(nextPos.Encode())
 
 	// No new complete lines: return the zero SourceUpdate the monitor treats
 	// as "no new data" so idle polls don't refresh the session's liveness.
-	if len(lines) == 0 {
-		return source.SourceUpdate{}, source.Cursor(strconv.FormatInt(nextOffset, 10)), nil
+	if len(lines) == 0 && !reset {
+		return source.SourceUpdate{}, next, nil
 	}
 
-	isFirst := offset == 0
+	isFirst := reset || pos.Offset == 0
 	var acc accumulator
 	for i := 0; i < len(lines); i++ {
 		parseLine(lines[i], isFirst && i == 0, &acc)
@@ -160,7 +158,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	// first batch, so it can't be the source of the monitor's session key.
 	update := acc.toUpdate()
 	update.SessionID = h.ID
-	next := source.Cursor(strconv.FormatInt(nextOffset, 10))
+	update.Reset = reset
 	return update, next, nil
 }
 

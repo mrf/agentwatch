@@ -103,27 +103,43 @@ type Result struct {
 // Binary garbage in lines is returned as-is; callers are responsible for JSON
 // validation.
 func Read(path string, offset int64, opts Options) (Result, error) {
-	fail := Result{NextOffset: offset}
+	f, _, err := openRegular(path)
+	if err != nil {
+		return Result{NextOffset: offset}, err
+	}
+	defer func() { _ = f.Close() }()
+	return readOpen(f, path, offset, opts)
+}
 
+// openRegular opens path for reading only if it is a regular file, and
+// returns the opened file's info.
+func openRegular(path string) (*os.File, os.FileInfo, error) {
 	// Stat before opening: open(2) on a FIFO blocks until a writer appears,
 	// which would stall the caller's whole poll.
 	if err := requireRegular(os.Stat(path)); err != nil {
-		return fail, err
+		return nil, nil, err
 	}
 
 	f, err := os.Open(path)
 	if err != nil {
-		return fail, err
+		return nil, nil, err
 	}
-	defer func() { _ = f.Close() }()
 
 	// Re-check the opened file in case the path was swapped after the Stat.
-	if err := requireRegular(f.Stat()); err != nil {
-		return fail, err
+	info, err := f.Stat()
+	if err := requireRegular(info, err); err != nil {
+		_ = f.Close()
+		return nil, nil, err
 	}
+	return f, info, nil
+}
+
+// readOpen is Read on an already opened regular file.
+func readOpen(f *os.File, path string, offset int64, opts Options) (Result, error) {
+	fail := Result{NextOffset: offset}
 
 	if offset > 0 {
-		if _, err = f.Seek(offset, io.SeekStart); err != nil {
+		if _, err := f.Seek(offset, io.SeekStart); err != nil {
 			return fail, fmt.Errorf("jsonl: seek to offset %d: %w", offset, err)
 		}
 	}

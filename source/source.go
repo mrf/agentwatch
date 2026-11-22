@@ -53,7 +53,7 @@ type SessionHandle struct {
 
 // SourceUpdate carries incremental session data returned by Parse.
 // Delta fields (MessageCountDelta, ToolCallCountDelta) represent the change
-// since the previous Parse call; the monitor accumulates them.
+// since the previous Parse call; the monitor accumulates them (see Reset).
 type SourceUpdate struct {
 	SessionID string `json:"sessionId"`
 	Slug      string `json:"slug,omitempty"`
@@ -71,6 +71,15 @@ type SourceUpdate struct {
 	OutputTokens     int  `json:"outputTokens,omitempty"`
 	MaxContextTokens int  `json:"maxContextTokens"`
 	TokenEstimated   bool `json:"tokenEstimated"`
+
+	// Reset reports that the source discarded what it had parsed before and
+	// started over from the beginning of the session's data, for example
+	// because its file was truncated or replaced or its cursor was
+	// unreadable. The three count deltas are then absolute totals that
+	// replace the session's counts, and Subagents replaces the session's
+	// subagent list. A source must set SessionID on a reset update even when
+	// it carries no other data, so stale counts are cleared.
+	Reset bool `json:"reset,omitempty"`
 
 	MessageCountDelta    int    `json:"messageCountDelta,omitempty"`
 	ToolCallCountDelta   int    `json:"toolCallCountDelta,omitempty"`

@@ -25,7 +25,6 @@ import (
 	"context"
 	"fmt"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -128,35 +127,33 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	return handles, nil
 }
 
-// Parse implements source.Source. The cursor is the byte offset into the
-// session file as a decimal string. An empty cursor means start from zero.
+// Parse implements source.Source. The cursor is a jsonl.Position in the
+// session file; an empty cursor means start from zero. If the file was
+// truncated or replaced, it is re-read from the start as a Reset update.
 func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
-	var offset int64
-	if c != "" {
-		var err error
-		offset, err = strconv.ParseInt(string(c), 10, 64)
-		if err != nil {
-			return source.SourceUpdate{}, c, fmt.Errorf("pi: invalid cursor %q: %w", c, err)
-		}
+	pos, err := jsonl.ParsePosition(string(c))
+	if err != nil {
+		return source.SourceUpdate{}, c, fmt.Errorf("pi: invalid cursor %q: %w", c, err)
 	}
 
-	lines, nextOffset, err := jsonl.ReadLines(h.Path, offset, jsonl.Options{})
+	res, nextPos, reset, err := jsonl.ReadFrom(h.Path, pos, jsonl.Options{})
 	if err != nil {
 		return source.SourceUpdate{}, c, fmt.Errorf("pi: read %s: %w", h.Path, err)
 	}
+	lines := res.Lines
 
-	isFirst := offset == 0
+	isFirst := reset || pos.Offset == 0
 	var acc accumulator
 	for i := 0; i < len(lines); i++ {
 		parseLine(lines[i], isFirst && i == 0, &acc)
 	}
 
 	update := acc.toUpdate()
-	if len(lines) > 0 {
+	if len(lines) > 0 || reset {
 		update.SessionID = h.ID
+		update.Reset = reset
 	}
-	next := source.Cursor(strconv.FormatInt(nextOffset, 10))
-	return update, next, nil
+	return update, source.Cursor(nextPos.Encode()), nil
 }
 
 // sessionIDFromFilename extracts the session UUID from a Pi session filename.

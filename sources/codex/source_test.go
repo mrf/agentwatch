@@ -526,7 +526,7 @@ func TestParseFileLargerThanOldCapIsReadable(t *testing.T) {
 		t.Fatalf("Parse error: %v", err)
 	}
 	assertEqual(t, "Model", u.Model, "o3")
-	assertEqual(t, "Cursor", string(c), strconv.Itoa(len(line)))
+	assertEqual(t, "Cursor offset", cursorOffset(t, c), strconv.Itoa(len(line)))
 }
 
 func TestParseOversizedLineIsSkipped(t *testing.T) {
@@ -551,7 +551,7 @@ func TestParseOversizedLineIsSkipped(t *testing.T) {
 	}
 	assertEqual(t, "Model", u.Model, "o3")
 	assertEqual(t, "WorkingDir", u.WorkingDir, "/tmp/proj")
-	assertEqual(t, "Cursor", string(c), strconv.Itoa(len(normal)+len(oversized)+len(after)))
+	assertEqual(t, "Cursor offset", cursorOffset(t, c), strconv.Itoa(len(normal)+len(oversized)+len(after)))
 }
 
 // ---- helpers ---------------------------------------------------------------
