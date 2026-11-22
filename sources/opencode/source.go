@@ -153,11 +153,13 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 // Parse implements source.Source. The cursor records what was last reported
 // (counts, tokens, last activity, archive state); an unchanged session yields
 // a zero update so the monitor can let it go stale, and an archived session
-// is reported terminal once.
+// is reported terminal once. A cursor that cannot be decoded is discarded and
+// the session is re-read from scratch as a Reset update.
 func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
 	cur, err := decodeCursor(string(c))
-	if err != nil {
-		return source.SourceUpdate{}, c, err
+	reset := err != nil
+	if reset {
+		cur = cursor{}
 	}
 
 	s.mu.Lock()
@@ -204,6 +206,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 		StartedAt:          result.createdAt,
 		LastActivityAt:     result.lastActivity,
 		Terminal:           result.terminal,
+		Reset:              reset,
 	}
 	if result.terminal {
 		update.EndReason = "archived"
