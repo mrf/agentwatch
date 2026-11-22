@@ -83,6 +83,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		updates      []session.SessionState
 		lifecycles   []session.LifecycleEvent
 		healthEvents []Health
+		completions  []subagentCompletion
 	)
 
 	for i := 0; i < len(m.cfg.sources); i++ {
@@ -224,6 +225,9 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			}
 
 			m.store[h.ID] = state
+			if existed {
+				completions = appendCompletions(completions, h, existing.Subagents, state.Subagents)
+			}
 			if !update.StartedAt.IsZero() {
 				m.contentStart[h.ID] = struct{}{}
 			}
@@ -282,51 +286,36 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 	}
 
 	// Sweep: mark active sessions as terminal when a parent session reports
-	// the corresponding subagent as completed. Match by slug.
-	{
+	// the corresponding subagent as completed. Match by slug, within the
+	// parent's source, and only in the poll where the subagent transitioned
+	// to completed, so a session that resumes later is not swept again.
+	if len(completions) > 0 {
 		now := m.cfg.clock.Now()
 		m.mu.Lock()
 
-		// Collect slugs of terminal subagents from all sessions.
-		completedSlugs := make(map[string]struct{})
-		for _, s := range m.store {
-			for i := 0; i < len(s.Subagents); i++ {
-				sub := s.Subagents[i]
-				if sub.Activity == session.ActivityTerminal && sub.Slug != "" {
-					completedSlugs[sub.Slug] = struct{}{}
-				}
+		for id, s := range m.store {
+			if s.Lifecycle != session.LifecycleActive || s.Slug == "" {
+				continue
 			}
-		}
-
-		// Mark active sessions whose slug matches a completed subagent.
-		if len(completedSlugs) > 0 {
-			for id, s := range m.store {
-				if s.Lifecycle != session.LifecycleActive {
-					continue
-				}
-				if s.Slug == "" {
-					continue
-				}
-				if _, ok := completedSlugs[s.Slug]; !ok {
-					continue
-				}
-				s.Lifecycle = session.LifecycleTerminal
-				completedAt := now
-				s.CompletedAt = &completedAt
-				m.store[id] = s
-
-				cloned := s.Clone()
-				updates = append(updates, cloned)
-				lifecycles = append(lifecycles, session.LifecycleEvent{
-					Type:      session.EventTerminal,
-					SessionID: id,
-					Source:    s.Source,
-					From:      session.LifecycleActive,
-					To:        session.LifecycleTerminal,
-					At:        now,
-					Reason:    "parent reported subagent completion",
-				})
+			if !matchesCompletion(completions, id, s) {
+				continue
 			}
+			s.Lifecycle = session.LifecycleTerminal
+			completedAt := now
+			s.CompletedAt = &completedAt
+			m.store[id] = s
+
+			cloned := s.Clone()
+			updates = append(updates, cloned)
+			lifecycles = append(lifecycles, session.LifecycleEvent{
+				Type:      session.EventTerminal,
+				SessionID: id,
+				Source:    s.Source,
+				From:      session.LifecycleActive,
+				To:        session.LifecycleTerminal,
+				At:        now,
+				Reason:    "parent reported subagent completion",
+			})
 		}
 
 		m.mu.Unlock()
@@ -568,6 +557,48 @@ func mergeStartedAt(cur time.Time, curFromContent bool, in time.Time) time.Time 
 		return in
 	}
 	return cur
+}
+
+// subagentCompletion records that a subagent with Slug transitioned to
+// completed in the session host of Source during one poll.
+type subagentCompletion struct {
+	source string
+	host   string
+	slug   string
+}
+
+// appendCompletions appends one entry per slugged subagent in next that is
+// terminal now but was absent or not terminal in prev.
+func appendCompletions(dst []subagentCompletion, h source.SessionHandle, prev, next []session.SubagentState) []subagentCompletion {
+	wasDone := make(map[string]struct{}, len(prev))
+	for i := 0; i < len(prev); i++ {
+		if prev[i].Activity == session.ActivityTerminal {
+			wasDone[prev[i].ID] = struct{}{}
+		}
+	}
+	for i := 0; i < len(next); i++ {
+		sub := next[i]
+		if sub.Activity != session.ActivityTerminal || sub.Slug == "" {
+			continue
+		}
+		if _, done := wasDone[sub.ID]; done {
+			continue
+		}
+		dst = append(dst, subagentCompletion{source: h.Source, host: h.ID, slug: sub.Slug})
+	}
+	return dst
+}
+
+// matchesCompletion reports whether s (stored under id) shares a source and
+// slug with a completion reported by a different session.
+func matchesCompletion(completions []subagentCompletion, id string, s session.SessionState) bool {
+	for i := 0; i < len(completions); i++ {
+		c := completions[i]
+		if c.source == s.Source && c.slug == s.Slug && c.host != id {
+			return true
+		}
+	}
+	return false
 }
 
 // mergeSubagents merges incoming subagents into existing by ID and returns a
