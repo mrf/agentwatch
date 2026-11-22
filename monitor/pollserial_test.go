@@ -85,14 +85,12 @@ func TestPollOnce_ConcurrentCallsApplyDeltaOnce(t *testing.T) {
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			<-start
 			if err := m.PollOnce(context.Background()); err != nil {
 				t.Errorf("PollOnce: %v", err)
 			}
-		}()
+		})
 	}
 	close(start)
 	wg.Wait()

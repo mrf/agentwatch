@@ -60,9 +60,7 @@ func TestRace_ConcurrentSnapshotDuringPollOnce(t *testing.T) {
 	stop := make(chan struct{})
 
 	for r := 0; r < readers; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-stop:
@@ -72,7 +70,7 @@ func TestRace_ConcurrentSnapshotDuringPollOnce(t *testing.T) {
 					_ = len(snap)
 				}
 			}
-		}()
+		})
 	}
 
 	for i := 0; i < iterations; i++ {
@@ -137,9 +135,7 @@ func TestRace_ConcurrentSnapshotDuringRepeatedPolling(t *testing.T) {
 	const readers = 3
 	var wg sync.WaitGroup
 	for r := 0; r < readers; r++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for {
 				select {
 				case <-pollDone:
@@ -149,7 +145,7 @@ func TestRace_ConcurrentSnapshotDuringRepeatedPolling(t *testing.T) {
 					_ = m.Health()
 				}
 			}
-		}()
+		})
 	}
 
 	<-pollDone
@@ -191,13 +187,11 @@ func TestRace_ConcurrentPollOnce(t *testing.T) {
 	var wg sync.WaitGroup
 
 	for g := 0; g < goroutines; g++ {
-		wg.Add(1)
-		go func() {
-			defer wg.Done()
+		wg.Go(func() {
 			for p := 0; p < pollsPerGoroutine; p++ {
 				_ = m.PollOnce(ctx)
 			}
-		}()
+		})
 	}
 
 	wg.Wait()
@@ -402,9 +396,7 @@ func TestRace_ConcurrentHealthSnapshotPollOnce(t *testing.T) {
 	stop := make(chan struct{})
 
 	// Snapshot reader goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -413,12 +405,10 @@ func TestRace_ConcurrentHealthSnapshotPollOnce(t *testing.T) {
 				_ = m.Snapshot()
 			}
 		}
-	}()
+	})
 
 	// Health reader goroutine.
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
+	wg.Go(func() {
 		for {
 			select {
 			case <-stop:
@@ -427,7 +417,7 @@ func TestRace_ConcurrentHealthSnapshotPollOnce(t *testing.T) {
 				_ = m.Health()
 			}
 		}
-	}()
+	})
 
 	// Poll from the main test goroutine.
 	for i := 0; i < iterations; i++ {

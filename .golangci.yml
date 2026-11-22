@@ -99,8 +99,6 @@ linters:
           - goconst # repeated fixture strings are clearer inline.
           - unparam # test helpers keep a uniform signature.
           - forcetypeassert # a failed assertion in a test panics, which is the desired failure.
-      - path: ^monitor/
-        linters: [modernize] # WaitGroup.Go in race tests; follow-up (monitor under concurrent edit).
       - path: internal/testutil/
         linters:
           - thelper # helpers take `t testing.TB`; renaming to `tb` is churn.
