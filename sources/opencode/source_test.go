@@ -179,19 +179,44 @@ func TestParseCursorAdvances(t *testing.T) {
 	}
 }
 
-func TestParseInvalidCursor(t *testing.T) {
+func TestParseInvalidCursorResets(t *testing.T) {
 	dbPath := seedFileDB(t, func(db *sql.DB) {
-		insertSession(t, db, "sess-1", "", "/project",
-			`{"id":"model"}`, 0, 0,
+		insertSession(t, db, "sess-1", "slug", "/project",
+			`{"id":"model"}`, 100, 10,
 			"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z", "")
+		insertMessage(t, db, "msg-1", "sess-1", `{"role":"user"}`,
+			"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z")
+		insertMessage(t, db, "msg-2", "sess-1", `{"role":"assistant"}`,
+			"2026-01-15T10:00:01Z", "2026-01-15T10:00:01Z")
 	})
 
 	src := opencode.New(opencode.WithDBPath(dbPath))
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
-	_, _, err := src.Parse(context.Background(), h, source.Cursor("not-valid"))
-	if err == nil {
-		t.Error("expected error for invalid cursor")
+	for _, bad := range []source.Cursor{"not-valid", "1,2,3", "a,b,c,d,e,f,g", "0,0,0,0,0,9,0"} {
+		u, c, err := src.Parse(context.Background(), h, bad)
+		if err != nil {
+			t.Fatalf("Parse(%q) error: %v", bad, err)
+		}
+		if !u.Reset {
+			t.Errorf("Parse(%q): Reset = false, want true", bad)
+		}
+		assertInt(t, "MessageCountDelta", u.MessageCountDelta, 2)
+		assertInt(t, "ContextTokens", u.ContextTokens, 100)
+		if c == "" || c == bad {
+			t.Errorf("Parse(%q): cursor = %q, want a fresh valid cursor", bad, c)
+		}
+
+		u2, c2, err := src.Parse(context.Background(), h, c)
+		if err != nil {
+			t.Fatalf("Parse after reset error: %v", err)
+		}
+		if u2.Reset {
+			t.Errorf("Parse(%q): second parse Reset = true, want incremental", bad)
+		}
+		if c2 != c {
+			t.Errorf("Parse(%q): cursor changed on unchanged session: %q vs %q", bad, c2, c)
+		}
 	}
 }
 
