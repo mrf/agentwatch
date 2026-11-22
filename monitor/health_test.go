@@ -167,8 +167,8 @@ func TestHealth_ParseFailuresDegradeHealth(t *testing.T) {
 	assertHealthStatus(t, m, "test", monitor.HealthDegraded)
 
 	h := m.Health()["test"]
-	if h.ParseFailures != threshold {
-		t.Errorf("ParseFailures = %d, want %d", h.ParseFailures, threshold)
+	if h.ParseFailures != 1 {
+		t.Errorf("ParseFailures = %d, want 1 (sessions failing to parse)", h.ParseFailures)
 	}
 }
 
@@ -215,14 +215,17 @@ func TestHealth_RecoveryToHealthy(t *testing.T) {
 	}
 	assertHealthStatus(t, m, "claude", monitor.HealthDegraded)
 
-	// Successful poll clears failures and resets to healthy.
-	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
-		SessionID: "s1",
-		Activity:  session.ActivityIdle,
-	}, "c2")
-	if err := m.PollOnce(ctx); err != nil {
-		t.Fatalf("PollOnce recovery: %v", err)
+	// Recovery needs threshold consecutive clean polls (hysteresis).
+	for i := 0; i < threshold; i++ {
+		assertHealthStatus(t, m, "claude", monitor.HealthDegraded)
+		clk.Advance(time.Second)
+		src.AddUpdate("s1", source.SourceUpdate{
+			SessionID: "s1",
+			Activity:  session.ActivityIdle,
+		}, source.Cursor(fmt.Sprintf("c%d", i+2)))
+		if err := m.PollOnce(ctx); err != nil {
+			t.Fatalf("PollOnce recovery %d: %v", i, err)
+		}
 	}
 	assertHealthStatus(t, m, "claude", monitor.HealthHealthy)
 
