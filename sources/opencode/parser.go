@@ -70,13 +70,9 @@ func decodeCursor(s string) (cursor, error) {
 	if len(parts) != 2 && len(parts) != 6 && len(parts) != 7 {
 		return cursor{}, fmt.Errorf("%w %q", errInvalidCursor, s)
 	}
-	var n [7]int64
-	for i := 0; i < len(parts); i++ {
-		v, err := strconv.ParseInt(parts[i], 10, 64)
-		if err != nil {
-			return cursor{}, fmt.Errorf("%w %q: %w", errInvalidCursor, s, err)
-		}
-		n[i] = v
+	n, err := parseCursorFields(s, parts)
+	if err != nil {
+		return cursor{}, err
 	}
 	archive := n[5]
 	if archive < int64(archiveNone) || archive > int64(archiveConfirmed) {
@@ -95,6 +91,20 @@ func decodeCursor(s string) (cursor, error) {
 		working:      n[6] == 1,
 		seen:         true,
 	}, nil
+}
+
+// parseCursorFields parses the comma-separated integers of cursor s; absent
+// trailing fields are zero.
+func parseCursorFields(s string, parts []string) ([7]int64, error) {
+	var n [7]int64
+	for i := 0; i < len(parts); i++ {
+		v, err := strconv.ParseInt(parts[i], 10, 64)
+		if err != nil {
+			return n, fmt.Errorf("%w %q: %w", errInvalidCursor, s, err)
+		}
+		n[i] = v
+	}
+	return n, nil
 }
 
 // openReadOnly opens the SQLite database in read-only mode.
@@ -181,106 +191,26 @@ type parseResult struct {
 // queryParseData queries the database for session parse data and computes
 // deltas. When nothing changed since cur it returns changed=false and cur.
 func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur cursor) (parseResult, cursor, error) {
-	// Query session row.
-	var s sessionRow
-	err := db.QueryRowContext(ctx,
-		`SELECT id, slug, directory, model, COALESCE(tokens_input, 0), COALESCE(tokens_output, 0),
-		 created_at, updated_at, time_archived
-		 FROM session WHERE id = ?`, sessionID,
-	).Scan(&s.id, &s.slug, &s.directory, &s.modelJSON,
-		&s.tokensInput, &s.tokensOutput,
-		&s.createdAt, &s.updatedAt, &s.timeArchived)
-	if err != nil {
-		if errors.Is(err, sql.ErrNoRows) {
-			return parseResult{}, cur, nil
-		}
-		return parseResult{}, cur, fmt.Errorf("opencode: query session %s: %w", sessionID, err)
+	s, found, err := querySession(ctx, db, sessionID)
+	if err != nil || !found {
+		return parseResult{}, cur, err
 	}
 
 	// An archived session is reported terminal once; after that it is silent
 	// until it is unarchived.
 	first := !cur.seen
-	if s.timeArchived.Valid && s.timeArchived.String != "" && cur.archive == archiveConfirmed {
+	terminal := s.timeArchived.Valid && s.timeArchived.String != ""
+	if terminal && cur.archive == archiveConfirmed {
 		return parseResult{}, cur, nil
 	}
 
-	// Count total messages.
-	var msgCount int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM message WHERE session_id = ?`, sessionID,
-	).Scan(&msgCount); err != nil {
-		return parseResult{}, cur, fmt.Errorf("opencode: count messages: %w", err)
+	act, err := queryActivity(ctx, db, sessionID, s.updatedAt)
+	if err != nil {
+		return parseResult{}, cur, err
 	}
-
-	// Count total tool-invocation parts.
-	var toolCount int
-	if err := db.QueryRowContext(ctx,
-		`SELECT COUNT(*) FROM part WHERE session_id = ?
-		 AND json_extract(data, '$.type') = 'tool-invocation'`,
-		sessionID,
-	).Scan(&toolCount); err != nil {
-		return parseResult{}, cur, fmt.Errorf("opencode: count tool parts: %w", err)
-	}
-
-	// Get latest tool-invocation part's toolName.
-	var currentTool string
-	var toolData sql.NullString
-	err = db.QueryRowContext(ctx,
-		`SELECT data FROM part WHERE session_id = ?
-		 AND json_extract(data, '$.type') = 'tool-invocation'
-		 ORDER BY created_at DESC LIMIT 1`,
-		sessionID,
-	).Scan(&toolData)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return parseResult{}, cur, fmt.Errorf("opencode: query latest tool: %w", err)
-	}
-	if toolData.Valid {
-		currentTool = extractToolName(toolData.String)
-	}
-
-	// Get latest message for role and LastActivityAt.
-	var lastActivity time.Time
-	var lastRole string
-	var msgData sql.NullString
-	var msgUpdatedAt sql.NullString
-	err = db.QueryRowContext(ctx,
-		`SELECT data, updated_at FROM message WHERE session_id = ?
-		 ORDER BY created_at DESC LIMIT 1`,
-		sessionID,
-	).Scan(&msgData, &msgUpdatedAt)
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return parseResult{}, cur, fmt.Errorf("opencode: query latest message: %w", err)
-	}
-	var state messageState
-	if msgData.Valid {
-		state = extractMessageState(msgData.String)
-		lastRole = state.role
-	}
-	if msgUpdatedAt.Valid {
-		lastActivity = parseTimestamp(msgUpdatedAt.String)
-	}
-	if lastActivity.IsZero() {
-		lastActivity = parseTimestamp(s.updatedAt)
-	}
-
-	// Streaming rewrites parts, not messages, so the newest part write counts
-	// as activity too.
-	var partUpdatedAt sql.NullString
-	if err := db.QueryRowContext(ctx,
-		`SELECT MAX(updated_at) FROM part WHERE session_id = ?`, sessionID,
-	).Scan(&partUpdatedAt); err != nil {
-		return parseResult{}, cur, fmt.Errorf("opencode: query latest part: %w", err)
-	}
-	if t := parseTimestamp(nullStr(partUpdatedAt)); t.After(lastActivity) {
-		lastActivity = t
-	}
-
-	// Compute deltas (clamp to zero for safety).
-	msgDelta := max(msgCount-cur.msgCount, 0)
-	toolDelta := max(toolCount-cur.toolCount, 0)
+	msgCount, toolCount, state, lastActivity := act.msgCount, act.toolCount, act.state, act.lastActivity
 
 	var archivedAt time.Time
-	terminal := s.timeArchived.Valid && s.timeArchived.String != ""
 	if terminal {
 		archivedAt = parseTimestamp(s.timeArchived.String)
 	}
@@ -295,34 +225,162 @@ func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur curso
 		lastActivity: lastActivity,
 		archivedAt:   archivedAt,
 		terminal:     terminal,
-		msgDelta:     msgDelta,
-		toolDelta:    toolDelta,
-		currentTool:  currentTool,
-		lastRole:     lastRole,
-		inProgress:   state.inProgress,
-		replyDone:    state.replyDone,
+		// Clamp deltas to zero for safety.
+		msgDelta:    max(msgCount-cur.msgCount, 0),
+		toolDelta:   max(toolCount-cur.toolCount, 0),
+		currentTool: act.currentTool,
+		lastRole:    state.role,
+		inProgress:  state.inProgress,
+		replyDone:   state.replyDone,
 	}
 
-	newCur := cursor{
-		msgCount:     msgCount,
-		toolCount:    toolCount,
-		tokensInput:  s.tokensInput,
-		tokensOutput: s.tokensOutput,
-		working:      state.inProgress,
-		seen:         true,
-	}
-	if !lastActivity.IsZero() {
-		newCur.lastActivity = lastActivity.UnixNano()
-	}
-	if terminal {
-		newCur.archive = archiveConfirmed
-		if first {
-			newCur.archive = archivePending
-		}
-	}
+	newCur := nextCursor(&s, &act, terminal, first)
 	result.changed = first || newCur != cur
 
 	return result, newCur, nil
+}
+
+// nextCursor records what this parse reports, so an unchanged session can
+// be recognised next time.
+func nextCursor(s *sessionRow, act *sessionActivity, terminal, first bool) cursor {
+	c := cursor{
+		msgCount:     act.msgCount,
+		toolCount:    act.toolCount,
+		tokensInput:  s.tokensInput,
+		tokensOutput: s.tokensOutput,
+		working:      act.state.inProgress,
+		seen:         true,
+	}
+	if !act.lastActivity.IsZero() {
+		c.lastActivity = act.lastActivity.UnixNano()
+	}
+	if terminal {
+		c.archive = archiveConfirmed
+		if first {
+			c.archive = archivePending
+		}
+	}
+	return c
+}
+
+// sessionActivity is the per-session data read from the message and part
+// tables.
+type sessionActivity struct {
+	msgCount     int
+	toolCount    int
+	currentTool  string
+	state        messageState
+	lastActivity time.Time
+}
+
+func queryActivity(ctx context.Context, db *sql.DB, sessionID, sessionUpdatedAt string) (sessionActivity, error) {
+	var act sessionActivity
+	var err error
+	if act.msgCount, act.toolCount, err = queryCounts(ctx, db, sessionID); err != nil {
+		return sessionActivity{}, err
+	}
+	if act.currentTool, err = queryLatestTool(ctx, db, sessionID); err != nil {
+		return sessionActivity{}, err
+	}
+	if act.state, act.lastActivity, err = queryLatestActivity(ctx, db, sessionID, sessionUpdatedAt); err != nil {
+		return sessionActivity{}, err
+	}
+	return act, nil
+}
+
+// querySession reads the session row; found is false when it does not exist.
+func querySession(ctx context.Context, db *sql.DB, sessionID string) (s sessionRow, found bool, err error) {
+	err = db.QueryRowContext(ctx,
+		`SELECT id, slug, directory, model, COALESCE(tokens_input, 0), COALESCE(tokens_output, 0),
+		 created_at, updated_at, time_archived
+		 FROM session WHERE id = ?`, sessionID,
+	).Scan(&s.id, &s.slug, &s.directory, &s.modelJSON,
+		&s.tokensInput, &s.tokensOutput,
+		&s.createdAt, &s.updatedAt, &s.timeArchived)
+	if errors.Is(err, sql.ErrNoRows) {
+		return sessionRow{}, false, nil
+	}
+	if err != nil {
+		return sessionRow{}, false, fmt.Errorf("opencode: query session %s: %w", sessionID, err)
+	}
+	return s, true, nil
+}
+
+// queryCounts returns the session's total message and tool-invocation counts.
+func queryCounts(ctx context.Context, db *sql.DB, sessionID string) (msgCount, toolCount int, err error) {
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM message WHERE session_id = ?`, sessionID,
+	).Scan(&msgCount); err != nil {
+		return 0, 0, fmt.Errorf("opencode: count messages: %w", err)
+	}
+
+	if err := db.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM part WHERE session_id = ?
+		 AND json_extract(data, '$.type') = 'tool-invocation'`,
+		sessionID,
+	).Scan(&toolCount); err != nil {
+		return 0, 0, fmt.Errorf("opencode: count tool parts: %w", err)
+	}
+	return msgCount, toolCount, nil
+}
+
+// queryLatestTool returns the toolName of the newest tool-invocation part, or
+// "" if there is none.
+func queryLatestTool(ctx context.Context, db *sql.DB, sessionID string) (string, error) {
+	var toolData sql.NullString
+	err := db.QueryRowContext(ctx,
+		`SELECT data FROM part WHERE session_id = ?
+		 AND json_extract(data, '$.type') = 'tool-invocation'
+		 ORDER BY created_at DESC LIMIT 1`,
+		sessionID,
+	).Scan(&toolData)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return "", fmt.Errorf("opencode: query latest tool: %w", err)
+	}
+	if !toolData.Valid {
+		return "", nil
+	}
+	return extractToolName(toolData.String), nil
+}
+
+// queryLatestActivity returns the newest message's state and the session's
+// last activity time: the newest message or part write, falling back to the
+// session row's sessionUpdatedAt.
+func queryLatestActivity(ctx context.Context, db *sql.DB, sessionID, sessionUpdatedAt string) (messageState, time.Time, error) {
+	var msgData sql.NullString
+	var msgUpdatedAt sql.NullString
+	err := db.QueryRowContext(ctx,
+		`SELECT data, updated_at FROM message WHERE session_id = ?
+		 ORDER BY created_at DESC LIMIT 1`,
+		sessionID,
+	).Scan(&msgData, &msgUpdatedAt)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return messageState{}, time.Time{}, fmt.Errorf("opencode: query latest message: %w", err)
+	}
+	var state messageState
+	if msgData.Valid {
+		state = extractMessageState(msgData.String)
+	}
+	var lastActivity time.Time
+	if msgUpdatedAt.Valid {
+		lastActivity = parseTimestamp(msgUpdatedAt.String)
+	}
+	if lastActivity.IsZero() {
+		lastActivity = parseTimestamp(sessionUpdatedAt)
+	}
+
+	// Streaming rewrites parts, not messages, so the newest part write counts
+	// as activity too.
+	var partUpdatedAt sql.NullString
+	if err := db.QueryRowContext(ctx,
+		`SELECT MAX(updated_at) FROM part WHERE session_id = ?`, sessionID,
+	).Scan(&partUpdatedAt); err != nil {
+		return messageState{}, time.Time{}, fmt.Errorf("opencode: query latest part: %w", err)
+	}
+	if t := parseTimestamp(nullStr(partUpdatedAt)); t.After(lastActivity) {
+		lastActivity = t
+	}
+	return state, lastActivity, nil
 }
 
 // parseModelJSON extracts the model ID from a JSON model column value.

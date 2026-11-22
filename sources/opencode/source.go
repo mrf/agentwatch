@@ -182,23 +182,11 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 		return source.SourceUpdate{}, c, nil
 	}
 
-	activity := session.ActivityIdle
-	switch {
-	case result.terminal:
-		activity = session.ActivityTerminal
-	case result.inProgress, result.lastRole == "user":
-		activity = session.ActivityWorking
-	case result.replyDone:
-		activity = session.ActivityWaiting
-	case result.toolDelta > 0, result.msgDelta > 0:
-		activity = session.ActivityWorking
-	}
-
 	update := source.SourceUpdate{
 		SessionID:          h.ID,
 		Slug:               result.slug,
 		Model:              result.model,
-		Activity:           activity,
+		Activity:           result.activity(),
 		HasTokens:          true,
 		ContextTokens:      result.tokensInput,
 		OutputTokens:       result.tokensOutput,
@@ -217,4 +205,19 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	}
 
 	return update, source.Cursor(encodeCursor(newCur)), nil
+}
+
+// activity derives the session's activity from a changed parse result.
+func (r *parseResult) activity() session.Activity {
+	switch {
+	case r.terminal:
+		return session.ActivityTerminal
+	case r.inProgress, r.lastRole == "user":
+		return session.ActivityWorking
+	case r.replyDone:
+		return session.ActivityWaiting
+	case r.toolDelta > 0, r.msgDelta > 0:
+		return session.ActivityWorking
+	}
+	return session.ActivityIdle
 }
