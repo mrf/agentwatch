@@ -105,6 +105,30 @@ func newMux(mon *monitor.Monitor) (*http.ServeMux, *wsapi.Server) {
 	return mux, wsSrv
 }
 
+// shutdownOnSignal stops the monitor, the WebSocket server and srv
+// gracefully once sig fires.
+func shutdownOnSignal(sig <-chan os.Signal, cancel context.CancelFunc, wsSrv *wsapi.Server, srv *http.Server) {
+	<-sig
+	log.Print("shutting down...")
+	cancel()
+	wsSrv.Stop()
+
+	shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutCancel()
+	if err := srv.Shutdown(shutCtx); err != nil {
+		log.Printf("http shutdown: %v", err)
+	}
+}
+
+func logRoutes(addr string) {
+	log.Printf("listening on http://%s", addr)
+	log.Printf("  GET  /sessions      – list all sessions")
+	log.Printf("  GET  /sessions/{id} – single session")
+	log.Printf("  GET  /healthz       – source health")
+	log.Printf("  GET  /sources       – registered source names")
+	log.Printf("  GET  /ws            – WebSocket event stream")
+}
+
 func main() {
 	var dirs dirList
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address (host:port)")
@@ -147,18 +171,7 @@ func main() {
 	// Graceful shutdown on SIGINT / SIGTERM.
 	sig := make(chan os.Signal, 1)
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM)
-	go func() {
-		<-sig
-		log.Print("shutting down...")
-		cancel()
-		wsSrv.Stop()
-
-		shutCtx, shutCancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer shutCancel()
-		if err := srv.Shutdown(shutCtx); err != nil {
-			log.Printf("http shutdown: %v", err)
-		}
-	}()
+	go shutdownOnSignal(sig, cancel, wsSrv, srv)
 
 	// Poll sources on the configured interval, delivering events to the wsapi
 	// server via the relay sink.
@@ -168,12 +181,7 @@ func main() {
 		}
 	}()
 
-	log.Printf("listening on http://%s", *addr)
-	log.Printf("  GET  /sessions      – list all sessions")
-	log.Printf("  GET  /sessions/{id} – single session")
-	log.Printf("  GET  /healthz       – source health")
-	log.Printf("  GET  /sources       – registered source names")
-	log.Printf("  GET  /ws            – WebSocket event stream")
+	logRoutes(*addr)
 
 	if err := srv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		log.Fatalf("ListenAndServe: %v", err) //nolint:gocritic // exitAfterDefer: deferred cancel only releases the signal context, process exit does the same
