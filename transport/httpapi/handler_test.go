@@ -104,6 +104,49 @@ func TestHandler_GetSession(t *testing.T) {
 	}
 }
 
+// With a Pseudonymizer, the IDs a client sees in /sessions can be fed back
+// into /sessions/{id}, and the real ID never appears in either response.
+func TestHandler_Pseudonymize_ListThenGet(t *testing.T) {
+	mon, id := buildMonitor(t)
+	z, err := session.NewPseudonymizer(session.WithPseudonymKey([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatalf("NewPseudonymizer: %v", err)
+	}
+	h, err := httpapi.NewHandler(mon, httpapi.WithPolicy(session.Policy{Pseudonymizer: z}))
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, newLocalRequest("/sessions", nil))
+	if strings.Contains(w.Body.String(), id) {
+		t.Fatalf("list leaks real ID: %s", w.Body.String())
+	}
+	var states []session.SessionState
+	if err := json.NewDecoder(w.Body).Decode(&states); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(states) != 1 || states[0].ID != z.Pseudonym(id) {
+		t.Fatalf("expected one pseudonymous session, got %+v", states)
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, newLocalRequest("/sessions/"+states[0].ID, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET by pseudonym: expected 200, got %d", w.Code)
+	}
+	if strings.Contains(w.Body.String(), id) {
+		t.Fatalf("get leaks real ID: %s", w.Body.String())
+	}
+	var s session.SessionState
+	if err := json.NewDecoder(w.Body).Decode(&s); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if s.ID != states[0].ID {
+		t.Errorf("GET ID %q does not match list ID %q", s.ID, states[0].ID)
+	}
+}
+
 func TestHandler_GetSession_NotFound(t *testing.T) {
 	mon, _ := buildMonitor(t)
 	h, err := httpapi.NewHandler(mon)

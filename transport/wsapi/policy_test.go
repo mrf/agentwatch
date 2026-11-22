@@ -342,3 +342,67 @@ func TestPolicy_DoesNotMutateInput(t *testing.T) {
 		t.Errorf("Lifecycle mutated: %+v", *lc)
 	}
 }
+
+// A Pseudonymizer keeps snapshot, delta, removal and lifecycle IDs
+// correlatable without the real IDs reaching the wire.
+func TestPolicy_Pseudonymize_CorrelatesAcrossEvents(t *testing.T) {
+	z, err := session.NewPseudonymizer(session.WithPseudonymKey([]byte(strings.Repeat("k", 32))))
+	if err != nil {
+		t.Fatalf("NewPseudonymizer: %v", err)
+	}
+	p := fullPolicy
+	p.Pseudonymizer = z
+	srv, ts := newPolicyServer(t, wsapi.WithPolicy(p))
+
+	conn := dialWS(t, ts)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	read := func() monitor.Event {
+		t.Helper()
+		_, data, err := conn.Read(ctx)
+		if err != nil {
+			t.Fatalf("Read: %v", err)
+		}
+		assertNoSecrets(t, data)
+		return decode(t, data)
+	}
+	send := func(ev monitor.Event) {
+		t.Helper()
+		if err := srv.HandleEvent(context.Background(), ev); err != nil {
+			t.Fatalf("HandleEvent: %v", err)
+		}
+	}
+
+	snap := read()
+	if len(snap.Sessions) != 1 {
+		t.Fatalf("expected 1 session, got %d", len(snap.Sessions))
+	}
+	want := snap.Sessions[0].ID
+	if want == "" || want != z.Pseudonym(secretID) {
+		t.Fatalf("snapshot ID = %q, want pseudonym %q", want, z.Pseudonym(secretID))
+	}
+	if got := snap.Sessions[0].Subagents[0].ParentID; got != want {
+		t.Errorf("snapshot subagent ParentID = %q, want %q", got, want)
+	}
+
+	send(monitor.Event{Seq: 1, Type: monitor.EventDelta, Updates: []session.SessionState{secretState()}})
+	if delta := read(); len(delta.Updates) != 1 || delta.Updates[0].ID != want {
+		t.Errorf("delta ID does not match snapshot: %+v", delta.Updates)
+	}
+
+	send(monitor.Event{Seq: 2, Type: monitor.EventDelta, Removed: []string{secretID, secretSubID}})
+	removal := read()
+	if len(removal.Removed) != 2 || removal.Removed[0] != want {
+		t.Fatalf("Removed = %v, want [%q ...]", removal.Removed, want)
+	}
+	if removal.Removed[1] == "" || removal.Removed[1] == want {
+		t.Errorf("Removed[1] = %q, want a distinct pseudonym", removal.Removed[1])
+	}
+
+	send(monitor.Event{Seq: 3, Type: monitor.EventLifecycle, Lifecycle: &session.LifecycleEvent{
+		Type: session.EventRemoved, SessionID: secretID, Source: policySource,
+	}})
+	if lc := read().Lifecycle; lc == nil || lc.SessionID != want {
+		t.Errorf("Lifecycle.SessionID does not match snapshot: %+v", lc)
+	}
+}
