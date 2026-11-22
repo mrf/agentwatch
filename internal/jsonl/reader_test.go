@@ -460,3 +460,10 @@ func TestRead_ReportsSkippedAcrossBudgetBoundary(t *testing.T) {
 		t.Errorf("first line = %q", res.Lines[0])
 	}
 }
+
+func TestRead_DirectoryRejected(t *testing.T) {
+	_, _, err := ReadLines(t.TempDir(), 0, defaultOpts)
+	if !errors.Is(err, ErrNotRegular) {
+		t.Fatalf("err = %v, want ErrNotRegular", err)
+	}
+}

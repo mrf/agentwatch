@@ -18,6 +18,22 @@ const (
 	readBufferSize = 64 * 1024
 )
 
+// ErrNotRegular is returned by Read when the path is not a regular file (a
+// directory, FIFO, socket, or device).
+var ErrNotRegular = errors.New("jsonl: not a regular file")
+
+// requireRegular passes through a stat error, or returns ErrNotRegular when
+// info describes anything other than a regular file.
+func requireRegular(info os.FileInfo, err error) error {
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return fmt.Errorf("%w: mode %s", ErrNotRegular, info.Mode().Type())
+	}
+	return nil
+}
+
 // Options configures the JSONL reader.
 type Options struct {
 	// MaxReadBytes is the per-call read budget in bytes. Read stops starting
@@ -81,16 +97,30 @@ type Result struct {
 // must treat NextOffset > offset with zero Lines as progress (all consumed
 // lines were skipped).
 //
+// Read returns ErrNotRegular, without opening the path, if it is not a regular
+// file.
+//
 // Binary garbage in lines is returned as-is; callers are responsible for JSON
 // validation.
 func Read(path string, offset int64, opts Options) (Result, error) {
 	fail := Result{NextOffset: offset}
+
+	// Stat before opening: open(2) on a FIFO blocks until a writer appears,
+	// which would stall the caller's whole poll.
+	if err := requireRegular(os.Stat(path)); err != nil {
+		return fail, err
+	}
 
 	f, err := os.Open(path)
 	if err != nil {
 		return fail, err
 	}
 	defer func() { _ = f.Close() }()
+
+	// Re-check the opened file in case the path was swapped after the Stat.
+	if err := requireRegular(f.Stat()); err != nil {
+		return fail, err
+	}
 
 	if offset > 0 {
 		if _, err = f.Seek(offset, io.SeekStart); err != nil {
