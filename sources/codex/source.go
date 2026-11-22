@@ -283,54 +283,7 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 		parseSessionMeta(payload, a)
 
 	case "event_msg":
-		var event struct {
-			Type    string          `json:"type"`
-			Payload json.RawMessage `json:"payload"`
-			// top-level info for token_count (newer Codex CLI format)
-			Info json.RawMessage `json:"info"`
-			// top-level model_context_window for task_started
-			ModelContextWindow int `json:"model_context_window"`
-		}
-		if json.Unmarshal(payload, &event) != nil {
-			return
-		}
-		switch event.Type {
-		// Messages are counted from response_item only: real rollouts write
-		// each one to both streams, so counting here would double them.
-		case "user_message":
-			a.activity = session.ActivityWorking
-		case "agent_message": // mid-turn commentary too; task_complete ends the turn
-			a.activity = session.ActivityWorking
-		case "agent_reasoning":
-			a.activity = session.ActivityWorking
-		case "task_complete":
-			a.activity = session.ActivityWaiting
-		case "token_count":
-			// Newer format: top-level "info" inside the event_msg payload.
-			if len(event.Info) > 0 && string(event.Info) != "null" {
-				parseTokenCountInfo(event.Info, a)
-			} else if len(event.Payload) > 0 {
-				parseTokenCountFlat(event.Payload, a)
-			}
-		case "task_started":
-			// model_context_window appears directly in the event_msg payload.
-			if event.ModelContextWindow > 0 {
-				a.maxContextTokens = event.ModelContextWindow
-			}
-		case "turn_started":
-			parseTurnContext(event.Payload, a)
-		case eventToolCall:
-			parseToolCall(event.Payload, a)
-		case "session_configured":
-			var cfg struct {
-				Model json.RawMessage `json:"model"`
-			}
-			if json.Unmarshal(event.Payload, &cfg) == nil {
-				if m := parseModel(cfg.Model); m != "" {
-					a.model = m
-				}
-			}
-		}
+		parseEventMsg(payload, a)
 
 	case "response_item":
 		parseResponseItem(payload, a)
@@ -345,6 +298,63 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 
 	case "turn_context":
 		parseTurnContext(payload, a)
+	}
+}
+
+func parseEventMsg(payload json.RawMessage, a *accumulator) {
+	var event struct {
+		Type    string          `json:"type"`
+		Payload json.RawMessage `json:"payload"`
+		// top-level info for token_count (newer Codex CLI format)
+		Info json.RawMessage `json:"info"`
+		// top-level model_context_window for task_started
+		ModelContextWindow int `json:"model_context_window"`
+	}
+	if json.Unmarshal(payload, &event) != nil {
+		return
+	}
+	switch event.Type {
+	// Messages are counted from response_item only: real rollouts write
+	// each one to both streams, so counting here would double them.
+	// agent_message is mid-turn commentary too; task_complete ends the turn.
+	case "user_message", "agent_message", "agent_reasoning":
+		a.activity = session.ActivityWorking
+	case "task_complete":
+		a.activity = session.ActivityWaiting
+	case "token_count":
+		parseTokenCountEvent(event.Info, event.Payload, a)
+	case "task_started":
+		// model_context_window appears directly in the event_msg payload.
+		if event.ModelContextWindow > 0 {
+			a.maxContextTokens = event.ModelContextWindow
+		}
+	case "turn_started":
+		parseTurnContext(event.Payload, a)
+	case eventToolCall:
+		parseToolCall(event.Payload, a)
+	case "session_configured":
+		parseSessionConfigured(event.Payload, a)
+	}
+}
+
+// parseTokenCountEvent prefers the newer top-level info block of a
+// token_count event and falls back to its flat payload.
+func parseTokenCountEvent(info, payload json.RawMessage, a *accumulator) {
+	if len(info) > 0 && string(info) != "null" {
+		parseTokenCountInfo(info, a)
+	} else if len(payload) > 0 {
+		parseTokenCountFlat(payload, a)
+	}
+}
+
+func parseSessionConfigured(payload json.RawMessage, a *accumulator) {
+	var cfg struct {
+		Model json.RawMessage `json:"model"`
+	}
+	if json.Unmarshal(payload, &cfg) == nil {
+		if m := parseModel(cfg.Model); m != "" {
+			a.model = m
+		}
 	}
 }
 
@@ -373,35 +383,17 @@ func parseBareItem(line []byte, a *accumulator) {
 		Type     string `json:"type"`
 		ToolName string `json:"tool_name"`
 		Name     string `json:"name"`
-		Command  string `json:"command"`
 	}
 	if json.Unmarshal(line, &item) != nil {
+		return
+	}
+	if a.applyItem(item.Type, item.ToolName, item.Name) {
 		return
 	}
 	switch item.Type {
 	case "message":
 		a.messageDelta++
 		a.activity = session.ActivityWorking
-	case "reasoning":
-		a.activity = session.ActivityWorking
-	case "command_execution":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		a.currentTool = "Bash"
-	case "file_change":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		a.currentTool = "FileEdit"
-	case "web_search":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		a.currentTool = "WebSearch"
-	case "mcp_tool_call":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		if t := firstNonEmpty(item.ToolName, item.Name); t != "" {
-			a.currentTool = t
-		}
 	case eventToolCall:
 		parseToolCall(line, a)
 	case "token_count":
@@ -419,6 +411,9 @@ func parseResponseItem(payload json.RawMessage, a *accumulator) {
 	if json.Unmarshal(payload, &item) != nil {
 		return
 	}
+	if a.applyItem(item.Type, item.ToolName, item.Name) {
+		return
+	}
 	switch item.Type {
 	case "message":
 		// developer (and any other non-conversation) roles are injected
@@ -427,34 +422,40 @@ func parseResponseItem(payload json.RawMessage, a *accumulator) {
 			a.messageDelta++
 			a.activity = session.ActivityWorking
 		}
+	case "function_call", "custom_tool_call":
+		a.recordTool(item.Name)
+	case eventToolCall:
+		parseToolCall(payload, a)
+	}
+}
+
+// applyItem handles the item types the bare and response_item formats share,
+// reporting false for any other type.
+func (a *accumulator) applyItem(typ, toolName, name string) bool {
+	switch typ {
 	case "reasoning":
 		a.activity = session.ActivityWorking
 	case "command_execution":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		a.currentTool = "Bash"
+		a.recordTool("Bash")
 	case "file_change":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		a.currentTool = "FileEdit"
+		a.recordTool("FileEdit")
 	case "web_search":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		a.currentTool = "WebSearch"
+		a.recordTool("WebSearch")
 	case "mcp_tool_call":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		if t := firstNonEmpty(item.ToolName, item.Name); t != "" {
-			a.currentTool = t
-		}
-	case "function_call", "custom_tool_call":
-		a.toolCallDelta++
-		a.activity = session.ActivityWorking
-		if item.Name != "" {
-			a.currentTool = item.Name
-		}
-	case eventToolCall:
-		parseToolCall(payload, a)
+		a.recordTool(firstNonEmpty(toolName, name))
+	default:
+		return false
+	}
+	return true
+}
+
+// recordTool counts one tool call and, when name is non-empty, makes it the
+// current tool.
+func (a *accumulator) recordTool(name string) {
+	a.toolCallDelta++
+	a.activity = session.ActivityWorking
+	if name != "" {
+		a.currentTool = name
 	}
 }
 
@@ -469,11 +470,7 @@ func parseToolCall(payload json.RawMessage, a *accumulator) {
 	if json.Unmarshal(payload, &tool) != nil {
 		return
 	}
-	a.toolCallDelta++
-	a.activity = session.ActivityWorking
-	if t := firstNonEmpty(tool.ToolName, tool.Name, tool.Tool.Name); t != "" {
-		a.currentTool = t
-	}
+	a.recordTool(firstNonEmpty(tool.ToolName, tool.Name, tool.Tool.Name))
 }
 
 func parseTurnContext(payload json.RawMessage, a *accumulator) {
