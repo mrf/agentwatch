@@ -74,7 +74,7 @@ confirmed before it ships.
 | `cursor` (`WithRoot`) | `~/.cursor` GODOC (absent on this box) | `~/.cursor` GODOC | `%USERPROFILE%\.cursor` UNVERIFIED | none | `sources/cursor/source.go:10-11`. `decodeProjectName` assumes `/`-separated paths (`source.go:192-198`), so Windows `WorkingDir` is likely wrong — UNVERIFIED |
 | `opencode` (`WithDBPath`) | `$XDG_DATA_HOME/opencode/opencode.db` else `~/.local/share/opencode/opencode.db` GODOC (absent on this box) | UNVERIFIED (XDG-style vs `~/Library/Application Support` unknown) | UNVERIFIED | `XDG_DATA_HOME` GODOC (named as the thing the source does *not* read) | `sources/opencode/source.go:3-9` |
 | `pi` (`WithRoot`) | `$PI_CODING_AGENT_SESSION_DIR`, else `${PI_CODING_AGENT_DIR:-~/.pi/agent}/sessions` **VERIFIED** | same, UNVERIFIED | same under `%USERPROFILE%`, UNVERIFIED | both GODOC | `sources/pi/source.go:8-21` |
-| `antigravity` (`WithRoot`) | `~/.antigravitycli` GODOC — **contradicted on this box** | UNVERIFIED | UNVERIFIED | none | `sources/antigravity/source.go:4`, `parser_test.go:429`. Installed `agy` here writes `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite), not `<uuid>.json`; `~/.antigravitycli` is absent. Working-dir mapping scans `/proc` (`procmap.go:19-24`), so it is Linux-only |
+| `antigravity` (`WithRoot`) | `~/.antigravitycli` GODOC — **contradicted on this box** | UNVERIFIED | UNVERIFIED | none | `sources/antigravity/source.go:4`, `parser_test.go:429`. Installed `agy` here writes `~/.gemini/antigravity-cli/conversations/<uuid>.db` (SQLite), not `<uuid>.json`; `~/.antigravitycli` is absent. Working-dir mapping scanned `/proc` (`procmap.go`, removed in de58e50), so it was Linux-only |
 | `mock` | never auto-detected | | | | test-only |
 
 Consequences:

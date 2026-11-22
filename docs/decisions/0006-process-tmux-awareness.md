@@ -26,6 +26,7 @@ target in public v1 state").
 The Gemini source already contains a precedent: `sources/gemini/procmap.go`
 implements /proc-based process scanning to map hash-named session directories
 to working directories. This is source-private and Linux-only.
+*(Superseded 2026-11-22: `procmap.go` was removed by agentwatch-q3v, merge de58e50; no `/proc` code remains on main.)*
 
 ### Design constraints from the plan
 
@@ -306,6 +307,7 @@ Rationale:
 - The Gemini source (`sources/gemini/procmap.go`) already demonstrates that
   `/proc`-based scanning is sufficient and straightforward for the use cases
   here (PID, cmdline, cwd, process tree).
+  *(Superseded 2026-11-22: `procmap.go` was removed by agentwatch-q3v, merge de58e50; no `/proc` code remains on main.)*
 - gopsutil is a large dependency tree (~15 transitive deps) that would
   inflate `go.sum` for all consumers, even those who don't use process
   features. As a library, agentwatch should minimize its dependency footprint.
@@ -366,6 +368,10 @@ way. This can be a separate ADR when a macOS consumer materializes.
 
 ### 7. Gemini procmap consolidation
 
+> **Obsolete (2026-11-22):** `sources/gemini/procmap.go` became
+> `sources/antigravity/procmap.go` and was deleted by agentwatch-q3v (merge de58e50).
+> There is nothing left to consolidate. Original text retained below for history.
+
 The existing `sources/gemini/procmap.go` performs process scanning for a
 source-specific purpose (hash → working directory mapping). In v0.2, this
 should be refactored to use `integrations/process.Scanner` internally,
@@ -420,6 +426,6 @@ enrichment sink should:
 - Agent-racer can migrate its process/tmux code to agentwatch imports,
   reducing its internal implementation burden.
 - The Gemini source's `procmap.go` can be simplified in a follow-up but is
-  not blocked by this ADR.
+  not blocked by this ADR. *(Obsolete: file removed in de58e50; see §7.)*
 - Future OS platform support requires only new build-tagged files, not API
   changes.

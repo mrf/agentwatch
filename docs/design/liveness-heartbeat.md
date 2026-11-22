@@ -135,6 +135,6 @@ codex/pi/cursor have no gap; opencode's `changed=false` is a DB-diff result with
    says shelf: no source needs it today and an unused public field is a compatibility cost.
 4. Should the §4.5 row read "no data past the stale threshold for its activity"? This doc
    treats it as a clarification, not a new transition — confirm.
-5. Longer term, a per-source liveness probe (process alive, as antigravity's procmap does)
+5. Longer term, a per-source liveness probe (process alive, as antigravity's removed procmap did, de58e50)
    would replace guessing from silence. In scope later, or never (rule 3 keeps PIDs
    internal either way)?
