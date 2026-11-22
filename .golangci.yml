@@ -99,17 +99,8 @@ linters:
           - goconst # repeated fixture strings are clearer inline.
           - unparam # test helpers keep a uniform signature.
           - forcetypeassert # a failed assertion in a test panics, which is the desired failure.
-      # Packages under concurrent edit when this config landed; findings are
-      # tracked for a follow-up pass instead of editing them here. Remove each
-      # block as its package is cleaned up.
-      - path: ^sources/claude/
-        linters: [errchkjson, goconst, modernize, nilerr, perfsprint, unparam]
-      - path: ^(internal/)?jsonl/
-        linters: [gosec, thelper] # G706 log-injection taint in jsonl/parse.go; reader_test helper lacks t.Helper().
       - path: ^monitor/
-        linters: [modernize] # WaitGroup.Go in race tests.
-      - path: ^internal/filewatch/
-        linters: [gocritic, predeclared] # test-only: Join on one arg, `real` shadows a builtin.
+        linters: [modernize] # WaitGroup.Go in race tests; follow-up (monitor under concurrent edit).
       - path: internal/testutil/
         linters:
           - thelper # helpers take `t testing.TB`; renaming to `tb` is churn.

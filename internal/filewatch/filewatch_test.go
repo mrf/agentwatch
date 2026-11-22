@@ -215,12 +215,12 @@ func TestMultipleRoots(t *testing.T) {
 func TestSymlinkToFile(t *testing.T) {
 	root := t.TempDir()
 
-	real := filepath.Join(root, "real.jsonl")
-	if err := os.WriteFile(real, []byte("data"), 0o644); err != nil {
+	realPath := filepath.Join(root, "real.jsonl")
+	if err := os.WriteFile(realPath, []byte("data"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	link := filepath.Join(root, "link.jsonl")
-	if err := os.Symlink(real, link); err != nil {
+	if err := os.Symlink(realPath, link); err != nil {
 		t.Skip("symlinks not supported:", err)
 	}
 
@@ -383,7 +383,7 @@ func TestContextCancellation(t *testing.T) {
 			t.Fatal(err)
 		}
 		for j := 0; j < 10; j++ {
-			f := filepath.Join(sub, filepath.Join("file"+string(rune('a'+j))+".jsonl"))
+			f := filepath.Join(sub, "file"+string(rune('a'+j))+".jsonl")
 			if err := os.WriteFile(f, []byte("data"), 0o644); err != nil {
 				t.Fatal(err)
 			}
@@ -528,18 +528,18 @@ func TestSymlinkMutualLoopTerminates(t *testing.T) {
 // TestSymlinkedRoot verifies that a root which is itself a symlink to a
 // directory is walked, and that new files are picked up on a rescan.
 func TestSymlinkedRoot(t *testing.T) {
-	real := makeTree(t, map[string]string{"a.jsonl": "{}\n"})
+	realDir := makeTree(t, map[string]string{"a.jsonl": "{}\n"})
 	link := filepath.Join(t.TempDir(), "root-link")
-	mustSymlink(t, real, link)
+	mustSymlink(t, realDir, link)
 
 	w := newWalker(link, false)
 	assertPaths(t, discoverBounded(t, w), []string{filepath.Join(link, "a.jsonl")})
 
-	if err := os.WriteFile(filepath.Join(real, "b.jsonl"), []byte("{}\n"), 0o644); err != nil {
+	if err := os.WriteFile(filepath.Join(realDir, "b.jsonl"), []byte("{}\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
 	future := time.Now().Add(time.Minute)
-	if err := os.Chtimes(real, future, future); err != nil {
+	if err := os.Chtimes(realDir, future, future); err != nil {
 		t.Fatal(err)
 	}
 	assertPaths(t, discoverBounded(t, w), []string{

@@ -1138,12 +1138,15 @@ func TestWithMaxEndMarkerSize(t *testing.T) {
 
 	// Write a marker that is exactly 200 bytes (valid JSON).
 	ts := time.Now().UTC().Format(time.RFC3339Nano)
-	markerData, _ := json.Marshal(map[string]string{
+	markerData, err := json.Marshal(map[string]string{
 		"session_id":      sessionID,
 		"transcript_path": "/path/" + sessionID + ".jsonl",
 		"reason":          "exit_code",
 		"timestamp":       ts,
 	})
+	if err != nil {
+		t.Fatalf("marshal marker: %v", err)
+	}
 
 	markerPath := filepath.Join(markerDir, "m.json")
 	if err := os.WriteFile(markerPath, markerData, 0o644); err != nil {

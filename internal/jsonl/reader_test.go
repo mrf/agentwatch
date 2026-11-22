@@ -11,6 +11,7 @@ import (
 
 // writeFile creates a temp file with the given content and returns its path.
 func writeFile(t *testing.T, content string) string {
+	t.Helper()
 	return writeFileBytes(t, []byte(content))
 }
 
