@@ -286,7 +286,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 // parseParentLines parses the parent transcript's new lines, folds the
 // subagents they report into cc, and adds those IDs to touched.
 func parseParentLines(lines [][]byte, cc *claudeCursor, touched map[string]struct{}) parseResult {
-	result := parseRecords(lines, cc.knownParents(), cc.LastMessageID, false)
+	result := parseRecords(lines, cc.knownParents(), cc.LastMessageID, cc.subagentLastMessageIDs(), false)
 	cc.LastMessageID = result.lastMsgID
 	cc.Parents = mergeParents(cc.Parents, buildParentMap(result.subagents))
 	batch := buildSubagentStates(result.subagents)
@@ -294,6 +294,7 @@ func parseParentLines(lines [][]byte, cc *claudeCursor, touched map[string]struc
 		id := batch[i].ID
 		entry := cc.Subagents[id]
 		entry.State = accumulateSubagent(entry.State, batch[i])
+		entry.LastMessageID = result.subagents[id].lastMsgID
 		cc.putSubagent(id, entry)
 		touched[id] = struct{}{}
 	}

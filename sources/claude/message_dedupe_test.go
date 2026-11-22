@@ -121,3 +121,58 @@ func TestParse_SplitMessageAcrossParseCallsContinuationOnly(t *testing.T) {
 		t.Errorf("ToolCallCountDelta = %d, want 1: the continuation's tool_use still counts", u.ToolCallCountDelta)
 	}
 }
+
+// progressLine is one agent_progress record for subagent tool-use "tu-x"
+// carrying an assistant message id; Claude Code writes one per content block.
+func progressLine(id, block string) string {
+	return fmt.Sprintf(`{"type":"progress","toolUseID":"tu-x","parentToolUseID":"tu-parent","sessionId":"tok-1","slug":"sub-slug","timestamp":"2026-01-01T10:00:01.000Z","data":{"type":"agent_progress","message":{"type":"assistant","message":{"id":%q,"role":"assistant","model":"claude-sonnet-4-6","content":[%s],"usage":{"input_tokens":10,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}}}}}`, id, block)
+}
+
+func TestParseLines_ProgressSplitMessageCountsOnce(t *testing.T) {
+	r := parseLines([][]byte{
+		[]byte(progressLine("msg_P", textBlock)),
+		[]byte(progressLine("msg_P", toolBlock)),
+		[]byte(progressLine("msg_Q", textBlock)),
+	})
+	sub := r.subagents["tu-x"]
+	if sub == nil {
+		t.Fatal("subagent tu-x not parsed")
+	}
+	if sub.msgCount != 2 {
+		t.Errorf("msgCount = %d, want 2 (msg_P split across 2 records + msg_Q)", sub.msgCount)
+	}
+	if sub.toolCalls != 1 {
+		t.Errorf("toolCalls = %d, want 1: tool_use blocks still count per record", sub.toolCalls)
+	}
+}
+
+func TestParseLines_ProgressAssistantWithoutIDStillCountsEachRecord(t *testing.T) {
+	r := parseLines([][]byte{[]byte(progressLine("", textBlock)), []byte(progressLine("", textBlock))})
+	if got := r.subagents["tu-x"].msgCount; got != 2 {
+		t.Errorf("msgCount = %d, want 2 (no message.id, nothing to dedupe on)", got)
+	}
+}
+
+func TestParse_ProgressSplitMessageAcrossParseCalls(t *testing.T) {
+	path, h := writeTranscript(t, tokUserLine, progressLine("msg_P", textBlock))
+	src, err := New()
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, c, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Subagents) != 1 || u.Subagents[0].MessageCount != 1 {
+		t.Fatalf("first subagents = %+v, want one with MessageCount 1", u.Subagents)
+	}
+
+	appendTranscript(t, path, progressLine("msg_P", toolBlock), progressLine("msg_Q", textBlock))
+	u, _, err = src.Parse(context.Background(), h, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(u.Subagents) != 1 || u.Subagents[0].MessageCount != 2 {
+		t.Errorf("second subagents = %+v, want MessageCount 2 (msg_P counted once, msg_Q new)", u.Subagents)
+	}
+}

@@ -224,6 +224,18 @@ func (cc *claudeCursor) knownParents() map[string]string {
 	return m
 }
 
+// subagentLastMessageIDs returns each subagent's last counted message.id, so
+// progress records continuing a split message across polls are not recounted.
+func (cc *claudeCursor) subagentLastMessageIDs() map[string]string {
+	m := make(map[string]string, len(cc.Subagents))
+	for id, e := range cc.Subagents {
+		if e.LastMessageID != "" {
+			m[id] = e.LastMessageID
+		}
+	}
+	return m
+}
+
 // pruneParents drops the links of completed subagents, which no later
 // tool_result can complete again, so the cursor does not grow with every
 // subagent the session has ever run.
