@@ -1,17 +1,18 @@
-// Package antigravity provides the Antigravity CLI source for agentwatch.
+// Package antigravity provides the Antigravity CLI (agy) source for
+// agentwatch.
 //
-// An AntigravitySource discovers sessions by scanning a directory of
-// Antigravity CLI session files (typically ~/.antigravitycli). Each session
-// is stored as a <uuid>.json file that Antigravity rewrites in full on every
-// update — unlike Claude, which appends to JSONL files.
+// agy stores each conversation as a SQLite database, <uuid>.db, in its
+// conversations directory (typically ~/.gemini/antigravity-cli/conversations
+// as of agy 1.5.14). The database runs in WAL mode while agy has it open, so
+// recent writes may live only in the <uuid>.db-wal sidecar. The source opens
+// databases read-only and decodes only step metadata — never step payloads.
 //
-// Because Antigravity rewrites files rather than appending, the source uses
-// file mtime as its cursor instead of a byte offset. The cursor also encodes
-// previous message and tool-call totals so that deltas can be computed
-// correctly across rewrites.
+// The cursor is a fingerprint of the database and WAL file stats plus the
+// message and tool-call totals seen on the previous poll, so unchanged
+// conversations are skipped without opening them and deltas survive
+// in-place step updates.
 //
-// Use New with WithRoot to configure the session root directory. Process
-// scanning for working directory detection is source-private in v1.
+// Use New with WithRoot to configure the conversations directory.
 package antigravity
 
 import (
@@ -22,77 +23,55 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/mrf/agentwatch/internal/filewatch"
+	"github.com/mrf/agentwatch/internal/sqlitero"
 	"github.com/mrf/agentwatch/source"
 )
 
-// lastConversationFile is the file that tracks the most recent session UUID.
-const lastConversationFile = "last-conversation-id"
-
-// procCacheTTL bounds how stale the /proc scan used for working-directory
-// detection may be. Discover runs every poll; walking /proc that often is
-// wasted work for data that changes only when agy starts or exits.
-const procCacheTTL = 5 * time.Second
-
-// sessionIDPattern matches the canonical UUID stem of a session file.
+// sessionIDPattern matches the canonical UUID stem of a conversation file.
 var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
 // Option configures an AntigravitySource.
 type Option func(*AntigravitySource)
 
-// WithRoot sets the root directory to scan for Antigravity CLI session files.
-// Discover walks this directory for <uuid>.json files, treating each file as
-// a session keyed by its filename stem (the Antigravity session UUID). Other
-// JSON files under the root are ignored.
-// If root is empty, Discover returns no sessions.
+// WithRoot sets the agy conversations directory. Discover walks it for
+// <uuid>.db files, treating each as a session keyed by the UUID. Other files
+// are ignored. If root is empty, Discover returns no sessions.
 func WithRoot(path string) Option {
 	return func(s *AntigravitySource) {
 		s.root = path
 	}
 }
 
-// WithDiscoverWindow limits discovery to session files whose modification
-// time is within d of the current time. Zero disables age filtering.
+// WithDiscoverWindow limits discovery to conversations written within d of
+// the current time, counting writes still pending in the WAL. Zero disables
+// age filtering.
 func WithDiscoverWindow(d time.Duration) Option {
 	return func(s *AntigravitySource) {
 		s.window = d
 	}
 }
 
-// AntigravitySource discovers and parses Antigravity CLI session files.
+// AntigravitySource discovers and parses agy conversation databases.
 // The zero value is usable but discovers no sessions until configured with
 // a non-empty root via WithRoot.
 type AntigravitySource struct {
 	root   string
 	window time.Duration
 	walker *filewatch.Walker
-
-	now       func() time.Time
-	scanProcs func() []string
-
-	procMu    sync.Mutex
-	procCwds  []string
-	procAt    time.Time
-	procFresh bool
+	now    func() time.Time
 }
 
 // New returns a new AntigravitySource configured by opts.
 func New(opts ...Option) (source.Source, error) {
-	s := &AntigravitySource{now: time.Now, scanProcs: scanProcFS}
+	s := &AntigravitySource{now: time.Now}
 	for i := 0; i < len(opts); i++ {
 		opts[i](s)
 	}
 	if s.root != "" {
-		wopts := []filewatch.Option{
-			filewatch.WithPattern("*.json"),
-		}
-		if s.window > 0 {
-			wopts = append(wopts, filewatch.WithMaxAge(s.window))
-		}
-		s.walker = filewatch.New([]string{s.root}, wopts...)
+		s.walker = filewatch.New([]string{s.root}, filewatch.WithPattern("*.db"))
 	}
 	return s, nil
 }
@@ -107,38 +86,43 @@ func Register(r *source.Registry, opts ...Option) error {
 // Name returns "antigravity".
 func (s *AntigravitySource) Name() string { return "antigravity" }
 
-// Discover scans the configured root for Antigravity CLI session files.
-// Each <uuid>.json file is returned as a SessionHandle. The session ID is the
-// filename stem (the UUID). WorkingDir is populated via process inspection
-// when a matching agy process is found; otherwise it is left empty.
+// Discover scans the configured root for <uuid>.db conversation files. The
+// session ID is the UUID; WorkingDir is reported by Parse from the
+// conversation's own metadata.
 func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	if s.walker == nil {
 		return nil, nil
 	}
 
+	// Age filtering happens here rather than in the walker: the .db mtime
+	// lags while agy's writes sit uncheckpointed in the WAL.
 	entries, err := s.walker.Discover(ctx)
 	if err != nil {
 		return nil, err
 	}
 
+	now := s.now()
 	handles := make([]source.SessionHandle, 0, len(entries))
-	var uuidToDir map[string]string
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
-		sessionID := strings.TrimSuffix(filepath.Base(e.Path), ".json")
+		sessionID := strings.TrimSuffix(filepath.Base(e.Path), ".db")
 		if !sessionIDPattern.MatchString(sessionID) {
 			continue
 		}
-		if uuidToDir == nil {
-			uuidToDir = s.workingDirs()
+		if s.window > 0 {
+			last := e.ModTime
+			if wal, err := os.Stat(e.Path + "-wal"); err == nil && wal.ModTime().After(last) {
+				last = wal.ModTime()
+			}
+			if now.Sub(last) > s.window {
+				continue
+			}
 		}
-
 		handles = append(handles, source.SessionHandle{
-			ID:         sessionID,
-			Path:       e.Path,
-			WorkingDir: uuidToDir[sessionID],
-			StartedAt:  e.ModTime,
-			Source:     "antigravity",
+			ID:        sessionID,
+			Path:      e.Path,
+			StartedAt: e.ModTime,
+			Source:    "antigravity",
 		})
 	}
 	if len(handles) == 0 {
@@ -147,119 +131,89 @@ func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandl
 	return handles, nil
 }
 
-// workingDirs maps the active session UUID to its working directory. The
-// mapping is only unambiguous when exactly one agy process is running.
-func (s *AntigravitySource) workingDirs() map[string]string {
-	lastID := readLastConversationID(s.root)
-	if lastID == "" {
-		return nil
-	}
-	cwds := s.procWorkingDirs()
-	if len(cwds) != 1 {
-		return nil
-	}
-	return map[string]string{lastID: cwds[0]}
-}
-
-// procWorkingDirs returns the working directories of running agy processes,
-// rescanning /proc at most once per procCacheTTL.
-func (s *AntigravitySource) procWorkingDirs() []string {
-	s.procMu.Lock()
-	defer s.procMu.Unlock()
-	now := s.now()
-	if !s.procFresh || now.Sub(s.procAt) >= procCacheTTL {
-		s.procCwds = s.scanProcs()
-		s.procAt = now
-		s.procFresh = true
-	}
-	return s.procCwds
-}
-
-// Parse reads the session's JSON file and returns a SourceUpdate.
+// Parse reads the conversation database and returns a SourceUpdate.
 //
-// Because Antigravity rewrites the file on every update, the cursor encodes
-// both the file mtime and the message/tool counts observed on the previous
-// poll. If the mtime has not changed since the last cursor, no new data is
-// returned. When the file is rewritten, Parse re-reads the entire file and
-// returns only the delta relative to what the cursor recorded.
+// If neither the database nor its WAL has changed since the cursor was
+// taken, no data is returned. Otherwise the conversation is re-read and the
+// message and tool-call deltas are computed against the cursor's totals.
 func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
 	if ctx.Err() != nil {
 		return source.SourceUpdate{}, c, ctx.Err()
 	}
 
-	fi, err := os.Stat(h.Path)
+	fp, err := statFingerprint(h.Path)
 	if err != nil {
 		return source.SourceUpdate{}, c, err
 	}
-
-	currentMtime := fi.ModTime().UnixNano()
-	prevMtime, prevMsgs, prevTools := decodeCursor(c)
-
-	if prevMtime == currentMtime {
-		// File has not changed since last poll.
+	prev, prevMsgs, prevTools := decodeCursor(c)
+	if prev == fp {
 		return source.SourceUpdate{}, c, nil
 	}
 
-	data, err := os.ReadFile(h.Path)
+	r, err := readFile(ctx, h.Path)
 	if err != nil {
-		return source.SourceUpdate{}, c, err
-	}
-
-	r, err := parseSession(data)
-	if err != nil {
-		// Advance the cursor past the bad file so we do not retry it
-		// forever. Log-worthy but not fatal — the monitor health system
-		// will surface repeated parse failures.
-		nextCursor := encodeCursor(currentMtime, prevMsgs, prevTools)
-		return source.SourceUpdate{}, nextCursor, fmt.Errorf("antigravity: parse %s: %w", h.Path, err)
+		if ctx.Err() != nil {
+			return source.SourceUpdate{}, c, err
+		}
+		// Advance past the unreadable state so it is not retried until the
+		// files change; the monitor's health tracking surfaces the failure.
+		next := encodeCursor(fp, prevMsgs, prevTools)
+		return source.SourceUpdate{}, next, fmt.Errorf("antigravity: read %s: %w", filepath.Base(h.Path), err)
 	}
 
 	totalMsgs := r.totalUserMsgs + r.totalModelMsgs
-	msgDelta := totalMsgs - prevMsgs
-	toolDelta := r.totalToolCalls - prevTools
-
-	// Clamp deltas to zero in case of a rollback or inconsistency.
-	if msgDelta < 0 {
-		msgDelta = 0
-	}
-	if toolDelta < 0 {
-		toolDelta = 0
-	}
-
-	nextCursor := encodeCursor(currentMtime, totalMsgs, r.totalToolCalls)
-
-	update := buildUpdate(r, h.ID, h.WorkingDir, msgDelta, toolDelta)
-
-	return update, nextCursor, nil
+	msgDelta := max(totalMsgs-prevMsgs, 0)
+	toolDelta := max(r.totalToolCalls-prevTools, 0)
+	next := encodeCursor(fp, totalMsgs, r.totalToolCalls)
+	return buildUpdate(r, h.ID, h.WorkingDir, msgDelta, toolDelta), next, nil
 }
 
-// encodeCursor serialises mtime nanoseconds, message count, and tool count
-// into an opaque cursor string: "<mtime_ns>,<msg_count>,<tool_count>".
-func encodeCursor(mtimeNS int64, msgs, tools int) source.Cursor {
-	return source.Cursor(fmt.Sprintf("%d,%d,%d", mtimeNS, msgs, tools))
+func readFile(ctx context.Context, path string) (parseResult, error) {
+	db, err := sqlitero.Open(path)
+	if err != nil {
+		return parseResult{}, err
+	}
+	defer func() { _ = db.Close() }()
+	return readConversation(ctx, db)
 }
 
-// decodeCursor parses the cursor produced by encodeCursor.
-// An empty or malformed cursor returns zeros, causing a full re-parse.
-func decodeCursor(c source.Cursor) (mtimeNS int64, msgs, tools int) {
-	if c == "" {
-		return 0, 0, 0
-	}
-	parts := strings.SplitN(string(c), ",", 3)
-	if len(parts) != 3 {
-		return 0, 0, 0
-	}
-	mtime, err := strconv.ParseInt(parts[0], 10, 64)
+// fingerprint identifies one state of a conversation's database and WAL.
+type fingerprint struct {
+	dbMtime, dbSize, walMtime, walSize int64
+}
+
+func statFingerprint(path string) (fingerprint, error) {
+	fi, err := os.Stat(path)
 	if err != nil {
-		return 0, 0, 0
+		return fingerprint{}, err
 	}
-	m, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return 0, 0, 0
+	fp := fingerprint{dbMtime: fi.ModTime().UnixNano(), dbSize: fi.Size()}
+	if wal, err := os.Stat(path + "-wal"); err == nil {
+		fp.walMtime, fp.walSize = wal.ModTime().UnixNano(), wal.Size()
 	}
-	t, err := strconv.Atoi(parts[2])
-	if err != nil {
-		return 0, 0, 0
+	return fp, nil
+}
+
+// encodeCursor serialises the fingerprint and totals into an opaque cursor:
+// "<db_mtime_ns>,<db_size>,<wal_mtime_ns>,<wal_size>,<msgs>,<tools>".
+func encodeCursor(fp fingerprint, msgs, tools int) source.Cursor {
+	return source.Cursor(fmt.Sprintf("%d,%d,%d,%d,%d,%d", fp.dbMtime, fp.dbSize, fp.walMtime, fp.walSize, msgs, tools))
+}
+
+// decodeCursor parses the cursor produced by encodeCursor. An empty or
+// malformed cursor returns zeros, causing a full re-read.
+func decodeCursor(c source.Cursor) (fp fingerprint, msgs, tools int) {
+	parts := strings.Split(string(c), ",")
+	if len(parts) != 6 {
+		return fingerprint{}, 0, 0
 	}
-	return mtime, m, t
+	var n [6]int64
+	for i := 0; i < len(parts); i++ {
+		v, err := strconv.ParseInt(parts[i], 10, 64)
+		if err != nil {
+			return fingerprint{}, 0, 0
+		}
+		n[i] = v
+	}
+	return fingerprint{dbMtime: n[0], dbSize: n[1], walMtime: n[2], walSize: n[3]}, int(n[4]), int(n[5])
 }

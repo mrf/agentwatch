@@ -6,13 +6,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
 
-	_ "modernc.org/sqlite"
+	"github.com/mrf/agentwatch/internal/sqlitero"
 )
 
 // archiveState records how far the archived-session terminal report has got.
@@ -97,32 +95,12 @@ func decodeCursor(s string) (cursor, error) {
 	}, nil
 }
 
-// dsn builds a read-only SQLite URI for path. The path is URL-escaped so that
-// '?', '#' and '%' in it are not read as URI syntax.
-func dsn(path string) string {
-	p := filepath.ToSlash(path)
-	if len(p) > 1 && p[1] == ':' {
-		p = "/" + p // Windows drive letter
-	}
-	u := url.URL{
-		Scheme:   "file",
-		OmitHost: true,
-		Path:     p,
-		RawQuery: url.Values{
-			"mode":    {"ro"},
-			"_pragma": {"busy_timeout(5000)"},
-		}.Encode(),
-	}
-	return u.String()
-}
-
 // openReadOnly opens the SQLite database in read-only mode.
 func openReadOnly(path string) (*sql.DB, error) {
-	db, err := sql.Open("sqlite", dsn(path))
+	db, err := sqlitero.Open(path)
 	if err != nil {
 		return nil, fmt.Errorf("opencode: open %s: %w", path, err)
 	}
-	db.SetMaxOpenConns(1)
 	return db, nil
 }
 

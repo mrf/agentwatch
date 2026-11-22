@@ -122,8 +122,8 @@ func (c *countingSource) Parse(ctx context.Context, h source.SessionHandle, cur 
 func TestPollOnce_AntigravityBadFileParsedOnce(t *testing.T) {
 	t.Parallel()
 	root := t.TempDir()
-	bad := filepath.Join(root, "11111111-2222-3333-4444-555555555555.json")
-	if err := os.WriteFile(bad, []byte("{not json"), 0o600); err != nil {
+	bad := filepath.Join(root, "11111111-2222-3333-4444-555555555555.db")
+	if err := os.WriteFile(bad, []byte("{not sqlite"), 0o600); err != nil {
 		t.Fatalf("write bad file: %v", err)
 	}
 
