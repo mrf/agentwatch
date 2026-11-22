@@ -73,6 +73,38 @@ func (r *sinkRelay) HandleEvent(ctx context.Context, ev monitor.Event) error {
 	return s.HandleEvent(ctx, ev)
 }
 
+// claudeSources builds one claude source per configured directory.
+func claudeSources(dirs []string) []source.Source {
+	sources := make([]source.Source, 0, len(dirs))
+	for i := 0; i < len(dirs); i++ {
+		src, err := claude.New(claude.WithRoot(dirs[i]))
+		if err != nil {
+			log.Fatalf("claude.New(%q): %v", dirs[i], err)
+		}
+		sources = append(sources, src)
+	}
+	return sources
+}
+
+// newMux mounts both transports. /ws is explicit; everything else falls
+// through to the httpapi handler which owns /sessions, /healthz, and /sources.
+func newMux(mon *monitor.Monitor) (*http.ServeMux, *wsapi.Server) {
+	wsSrv, err := wsapi.NewServer(mon)
+	if err != nil {
+		log.Fatalf("wsapi.NewServer: %v", err)
+	}
+
+	httpHandler, err := httpapi.NewHandler(mon)
+	if err != nil {
+		log.Fatalf("httpapi.NewHandler: %v", err)
+	}
+
+	mux := http.NewServeMux()
+	mux.Handle("/ws", wsSrv)
+	mux.Handle("/", httpHandler)
+	return mux, wsSrv
+}
+
 func main() {
 	var dirs dirList
 	addr := flag.String("addr", "127.0.0.1:8080", "listen address (host:port)")
@@ -84,15 +116,7 @@ func main() {
 		log.Fatal("at least one -dir is required")
 	}
 
-	// Build one claude source per configured directory.
-	sources := make([]source.Source, 0, len(dirs))
-	for i := 0; i < len(dirs); i++ {
-		src, err := claude.New(claude.WithRoot(dirs[i]))
-		if err != nil {
-			log.Fatalf("claude.New(%q): %v", dirs[i], err)
-		}
-		sources = append(sources, src)
-	}
+	sources := claudeSources(dirs)
 
 	// Break the monitor↔wsapi circular dependency: monitor needs wsapi as its
 	// event sink, and wsapi needs the monitor to send initial snapshots. The
@@ -108,22 +132,8 @@ func main() {
 		log.Fatalf("monitor.New: %v", err)
 	}
 
-	wsSrv, err := wsapi.NewServer(mon)
-	if err != nil {
-		log.Fatalf("wsapi.NewServer: %v", err)
-	}
+	mux, wsSrv := newMux(mon)
 	relay.set(wsSrv) // wire the relay before the monitor starts
-
-	httpHandler, err := httpapi.NewHandler(mon)
-	if err != nil {
-		log.Fatalf("httpapi.NewHandler: %v", err)
-	}
-
-	// Mount both transports. /ws is explicit; everything else falls through
-	// to the httpapi handler which owns /sessions, /healthz, and /sources.
-	mux := http.NewServeMux()
-	mux.Handle("/ws", wsSrv)
-	mux.Handle("/", httpHandler)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
