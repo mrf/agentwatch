@@ -1313,6 +1313,12 @@ func TestRegister(t *testing.T) {
 
 // --- Project path encoding/decoding tests ---
 
+// encodeProjectPath is the POSIX project-dir encoder, used only to build
+// fixtures: replace "/" and "." with "-" (/p/.claude/wt → -p--claude-wt).
+func encodeProjectPath(path string) string {
+	return strings.NewReplacer("/", "-", ".", "-").Replace(filepath.Clean(path))
+}
+
 func TestEncodeProjectPath(t *testing.T) {
 	testutil.SkipOnWindows(t, "encodeProjectPath implements the POSIX project-dir scheme; filepath.Clean emits backslashes")
 	cases := []struct {
@@ -1346,6 +1352,38 @@ func TestDecodeProjectPath_FallbackAllDashes(t *testing.T) {
 	got := decodeProjectPath("-nonexistent-path-deep")
 	if got != "/nonexistent/path/deep" {
 		t.Errorf("got %q, want %q", got, "/nonexistent/path/deep")
+	}
+}
+
+// Windows project dirs replace every non-alphanumeric path character with
+// "-", so C:\git\cc-plus is stored as C--git-cc-plus (drive Z is used below
+// so no path exists even on a Windows host). These names are
+// unverifiable on a POSIX host, so decoding falls back to backslash-separated
+// components.
+func TestDecodeProjectPath_Windows(t *testing.T) {
+	cases := []struct {
+		encoded string
+		want    string
+	}{
+		{"Z--git-cc-plus", `Z:\git\cc\plus`},
+		{"Z--Users-nonexistent-proj", `Z:\Users\nonexistent\proj`},
+		{"z--Users-nonexistent-proj", `z:\Users\nonexistent\proj`},
+		{"D--nonexistent--claude-wt", `D:\nonexistent\.claude\wt`},
+		{"Z--", `Z:\`},
+	}
+	for _, tc := range cases {
+		if got := decodeProjectPath(tc.encoded); got != tc.want {
+			t.Errorf("decodeProjectPath(%q) = %q, want %q", tc.encoded, got, tc.want)
+		}
+	}
+}
+
+func TestDecodeProjectPath_NotWindowsDriveForm(t *testing.T) {
+	// Only "<letter>--" is a drive prefix; other dash-less-leading names pass through.
+	for _, name := range []string{"CC-Users-x", "C-Users", "1--Users"} {
+		if got := decodeProjectPath(name); got != name {
+			t.Errorf("decodeProjectPath(%q) = %q, want unchanged", name, got)
+		}
 	}
 }
 
