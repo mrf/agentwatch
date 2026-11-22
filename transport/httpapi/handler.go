@@ -4,11 +4,16 @@ package httpapi
 import (
 	"encoding/json"
 	"net/http"
+	"strconv"
 
 	"github.com/mrf/agentwatch/internal/hostcheck"
 	"github.com/mrf/agentwatch/monitor"
 	"github.com/mrf/agentwatch/session"
 )
+
+// SeqHeader is the GET /sessions response header carrying the monitor event
+// sequence number the returned snapshot is consistent with.
+const SeqHeader = "X-Agentwatch-Seq"
 
 // Option configures a Handler.
 type Option func(*handler)
@@ -43,10 +48,16 @@ type handler struct {
 // NewHandler returns an http.Handler that serves the agentwatch HTTP API.
 // Routes:
 //
-//	GET /sessions       — list all sessions (Snapshot)
+//	GET /sessions       — list all sessions (JSON array); the X-Agentwatch-Seq
+//	                      response header carries the monitor event seq
 //	GET /sessions/{id}  — single session by ID (404 if not found)
 //	GET /healthz        — source health status
 //	GET /sources        — registered source names
+//
+// Dedupe contract: the GET /sessions body reflects every event with
+// Seq <= the X-Agentwatch-Seq header value (the same contract as the
+// wsapi snapshot). A client that bootstraps over HTTP and then follows
+// the WebSocket stream drops deltas with Seq <= that value.
 //
 // All responses are JSON with Content-Type: application/json.
 // Requests whose Host is not localhost, 127.0.0.1, [::1], or configured via
@@ -80,10 +91,11 @@ func (h *handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *handler) listSessions(w http.ResponseWriter, r *http.Request) {
-	states := h.mon.Snapshot()
+	states, seq := h.mon.SnapshotWithSeq()
 	for i := 0; i < len(states); i++ {
 		states[i] = h.policy.Apply(states[i])
 	}
+	w.Header().Set(SeqHeader, strconv.FormatUint(seq, 10))
 	writeJSON(w, http.StatusOK, states)
 }
 
