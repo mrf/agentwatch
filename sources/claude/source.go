@@ -248,7 +248,7 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 
 	// Subagent files are read before the parent's lines so that a tool_result
 	// in this batch can complete a subagent first seen in this poll.
-	touched, dirty := readSubagentFiles(h.Path, &cc)
+	touched, dirty, subSkipped := readSubagentFiles(h.Path, &cc)
 
 	var result parseResult
 	if len(lines) > 0 {
@@ -326,6 +326,8 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 		update.EndReason = cm.reason
 		update.EndedAt = cm.endedAt
 	}
+
+	update.SkippedLines = res.Skipped + subSkipped
 
 	if !dirty {
 		return update, c, nil

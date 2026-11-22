@@ -89,6 +89,13 @@ type SourceUpdate struct {
 	WorkingDir string `json:"workingDir,omitempty"`
 	Branch     string `json:"branch,omitempty"`
 
+	// SkippedLines is the number of lines this Parse call passed over
+	// because they exceeded the source's per-line size cap. It is a delta,
+	// not a total, and the monitor adds it to the source's health even when
+	// SessionID is empty, so an update that carries only skipped lines
+	// creates or refreshes no session.
+	SkippedLines int `json:"skippedLines,omitempty"`
+
 	StartedAt      time.Time `json:"startedAt"`
 	LastActivityAt time.Time `json:"lastActivityAt"`
 
