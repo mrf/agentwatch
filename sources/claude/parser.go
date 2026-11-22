@@ -90,6 +90,7 @@ type subagentResult struct {
 	outputTokens    int
 	toolCalls       int
 	msgCount        int
+	lastMsgID       string // message.id of the last counted progress message
 	currentTool     string
 	activity        session.Activity
 	firstTime       time.Time
@@ -124,6 +125,10 @@ type parseResult struct {
 	subagents map[string]*subagentResult // keyed by toolUseID
 	parentMap map[string]string          // parentToolUseID -> toolUseID (for cursor persistence)
 
+	// subLastMsgIDs seeds each progress-tracked subagent's message.id dedupe
+	// from the previous batch, keyed by toolUseID.
+	subLastMsgIDs map[string]string
+
 	// hasData is true when at least one user or enriched assistant record was parsed.
 	hasData bool
 }
@@ -144,25 +149,27 @@ func parseLines(lines [][]byte) parseResult {
 }
 
 func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parseResult {
-	return parseRecords(lines, knownParents, "", false)
+	return parseRecords(lines, knownParents, "", nil, false)
 }
 
 // parseSubagentLines parses a subagent's own transcript, where every record
 // is isSidechain:true and is that subagent's state rather than the parent's.
 // lastMsgID is the last message.id counted by the previous batch.
 func parseSubagentLines(lines [][]byte, lastMsgID string) parseResult {
-	return parseRecords(lines, nil, lastMsgID, true)
+	return parseRecords(lines, nil, lastMsgID, nil, true)
 }
 
 // parseRecords is the shared parser. With includeSidechain false, isSidechain
 // records are skipped entirely so they cannot overwrite parent session state.
-// lastMsgID seeds the assistant message.id dedupe from the previous batch.
-func parseRecords(lines [][]byte, knownParents map[string]string, lastMsgID string, includeSidechain bool) parseResult {
+// lastMsgID seeds the assistant message.id dedupe from the previous batch;
+// subLastMsgIDs does the same for each progress-tracked subagent.
+func parseRecords(lines [][]byte, knownParents map[string]string, lastMsgID string, subLastMsgIDs map[string]string, includeSidechain bool) parseResult {
 	r := parseResult{
-		lastMsgID: lastMsgID,
-		activity:  session.ActivityIdle,
-		subagents: make(map[string]*subagentResult),
-		parentMap: make(map[string]string),
+		lastMsgID:     lastMsgID,
+		activity:      session.ActivityIdle,
+		subagents:     make(map[string]*subagentResult),
+		parentMap:     make(map[string]string),
+		subLastMsgIDs: subLastMsgIDs,
 	}
 
 	// Seed parent map from prior batches.
@@ -289,16 +296,24 @@ func (r *parseResult) applyAssistant(rec *jsonlRecord) {
 }
 
 // countAssistantMessage counts a record once per consecutive message.id.
-// Records without an id cannot be deduplicated and always count.
 func (r *parseResult) countAssistantMessage(id string) {
+	if countsMessage(id, &r.lastMsgID) {
+		r.msgDelta++
+	}
+}
+
+// countsMessage reports whether a record with message id starts a new
+// message, advancing *last when it does. Records without an id cannot be
+// deduplicated and always count.
+func countsMessage(id string, last *string) bool {
 	if id == "" {
-		r.msgDelta++
-		return
+		return true
 	}
-	if id != r.lastMsgID {
-		r.msgDelta++
-		r.lastMsgID = id
+	if id == *last {
+		return false
 	}
+	*last = id
+	return true
 }
 
 // applyModelUsage records an assistant message's model and token usage.
@@ -387,20 +402,29 @@ func (r *parseResult) progressSubagent(rec *jsonlRecord, isAgent bool) *subagent
 		slug:            rec.Slug,
 		activity:        session.ActivityWorking,
 	}
-	r.subagents[rec.ToolUseID] = sub
+	r.addSubagent(sub)
 	if rec.ParentToolUseID != "" {
 		r.parentMap[rec.ParentToolUseID] = rec.ToolUseID
 	}
 	return sub
 }
 
+// addSubagent registers sub, resuming its message.id dedupe from the cursor.
+func (r *parseResult) addSubagent(sub *subagentResult) {
+	sub.lastMsgID = r.subLastMsgIDs[sub.id]
+	r.subagents[sub.id] = sub
+}
+
 // applyProgressMessage counts the inner message of a progress entry into sub.
 func applyProgressMessage(pd *progressData, sub *subagentResult) {
 	switch pd.Message.Type {
 	case typeAssistant:
-		sub.msgCount++
+		var id string
 		if pd.Message.Message != nil {
-			parseSubagentAssistantMessage(pd.Message.Message, sub)
+			id = parseSubagentAssistantMessage(pd.Message.Message, sub)
+		}
+		if countsMessage(id, &sub.lastMsgID) {
+			sub.msgCount++
 		}
 		if sub.activity != session.ActivityWorking {
 			sub.activity = session.ActivityWaiting
@@ -412,15 +436,17 @@ func applyProgressMessage(pd *progressData, sub *subagentResult) {
 }
 
 // parseSubagentAssistantMessage extracts model, usage, and tool calls from
-// a subagent's assistant message (the inner data.message.message object).
-func parseSubagentAssistantMessage(raw json.RawMessage, sub *subagentResult) {
+// a subagent's assistant message (the inner data.message.message object),
+// returning its message.id ("" when absent or undecodable).
+func parseSubagentAssistantMessage(raw json.RawMessage, sub *subagentResult) string {
 	var msg struct {
+		ID      string         `json:"id"`
 		Model   string         `json:"model"`
 		Usage   *tokenUsage    `json:"usage,omitempty"`
 		Content []contentBlock `json:"content"`
 	}
 	if err := json.Unmarshal(raw, &msg); err != nil {
-		return
+		return ""
 	}
 
 	if msg.Model != "" {
@@ -439,6 +465,7 @@ func parseSubagentAssistantMessage(raw json.RawMessage, sub *subagentResult) {
 			sub.activity = session.ActivityWorking
 		}
 	}
+	return msg.ID
 }
 
 // checkSubagentCompletion scans a user message's content blocks for
@@ -466,13 +493,13 @@ func checkSubagentCompletion(blocks []contentBlock, r *parseResult, at time.Time
 			sub.completedAt = at
 		} else {
 			// Cross-batch: create a minimal entry to signal completion.
-			r.subagents[subID] = &subagentResult{
+			r.addSubagent(&subagentResult{
 				id:              subID,
 				parentToolUseID: block.ToolUseID,
 				completed:       true,
 				activity:        session.ActivityTerminal,
 				completedAt:     at,
-			}
+			})
 		}
 	}
 }
