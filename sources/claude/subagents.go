@@ -89,7 +89,7 @@ func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]
 			entry.State.ParentID = readSubagentParentToolUseID(filepath.Join(dir, "agent-"+id+".meta.json"))
 		}
 
-		r := parseLines(lines)
+		r := parseSubagentLines(lines)
 		if r.hasData || !r.lastActivityAt.IsZero() {
 			entry.State = accumulateSubagent(entry.State, fileSubagentBatch(id, r))
 			touched[id] = struct{}{}

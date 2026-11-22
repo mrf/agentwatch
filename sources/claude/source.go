@@ -7,6 +7,7 @@
 package claude
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -282,6 +283,14 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 		}
 		if !result.startedAt.IsZero() {
 			update.StartedAt = result.startedAt
+		}
+	}
+
+	if !result.hasData && result.compactionDelta > 0 {
+		update = source.SourceUpdate{
+			SessionID:            cmp.Or(result.sessionID, h.ID),
+			CompactionCountDelta: result.compactionDelta,
+			LastActivityAt:       result.lastActivityAt,
 		}
 	}
 
@@ -561,18 +570,21 @@ func decodeCursor(c source.Cursor) (claudeCursor, error) {
 }
 
 // encodeProjectPath encodes an absolute path to the Claude Code project
-// directory naming scheme: replace "/" with "-". The leading "/" becomes
-// a leading "-" (e.g. /home/user/proj → -home-user-proj).
+// directory naming scheme: replace "/" and "." with "-". The leading "/"
+// becomes a leading "-" (e.g. /home/user/proj → -home-user-proj, and
+// /p/.claude/wt → -p--claude-wt).
 func encodeProjectPath(path string) string {
-	return strings.ReplaceAll(filepath.Clean(path), "/", "-")
+	return strings.NewReplacer("/", "-", ".", "-").Replace(filepath.Clean(path))
 }
 
 // decodeProjectPath reverses the encoding to recover the original working
 // directory path. The encoding is lossy: slash-to-dash means /home/my-user/proj
-// and /home/my/user-proj both encode to -home-my-user-proj. This function
-// tries all candidate reconstructions and returns the first one whose parent
-// directories exist on the current filesystem. Falls back to treating all
-// dashes as slashes when no verified path is found.
+// and /home/my/user-proj both encode to -home-my-user-proj. An empty segment
+// ("--") marks a dot-encoded component start (/.claude → --claude). This
+// function tries all candidate reconstructions and returns the first one that
+// exists on the current filesystem. Falls back to treating all dashes as
+// slashes when no verified path is found; callers must treat the result as a
+// guess and prefer the cwd recorded in the transcript.
 func decodeProjectPath(encoded string) string {
 	decoded, err := url.PathUnescape(encoded)
 	if err != nil {
@@ -583,7 +595,7 @@ func decodeProjectPath(encoded string) string {
 		return decoded
 	}
 
-	parts := strings.Split(decoded[1:], "-") // skip leading dash
+	parts := dotMarkedParts(strings.Split(decoded[1:], "-")) // skip leading dash
 
 	if result := decodeTryPaths(parts); result != "" {
 		return result
@@ -591,6 +603,27 @@ func decodeProjectPath(encoded string) string {
 
 	// Fallback: treat all dashes as slashes.
 	return "/" + strings.Join(parts, "/")
+}
+
+// dotMarkedParts folds each empty segment (an encoded "." immediately after a
+// separator) into the following segment as a leading ".". Trailing empty
+// segments are dropped.
+func dotMarkedParts(parts []string) []string {
+	out := make([]string, 0, len(parts))
+	dot := false
+	for i := 0; i < len(parts); i++ {
+		if parts[i] == "" {
+			dot = true
+			continue
+		}
+		if dot {
+			out = append(out, "."+parts[i])
+			dot = false
+			continue
+		}
+		out = append(out, parts[i])
+	}
+	return out
 }
 
 // decodeTryPaths iteratively builds candidate paths by choosing slash or
