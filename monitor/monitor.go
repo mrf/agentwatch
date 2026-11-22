@@ -25,8 +25,8 @@ type Monitor struct {
 
 	mu      sync.Mutex
 	store   map[string]session.SessionState
-	cursors map[string]source.Cursor // "source:sessionID" -> cursor
-	removed map[string]struct{}      // session IDs removed by retention sweep
+	cursors map[string]cursorEntry // "source:sessionID" -> cursor
+	removed map[string]struct{}    // session IDs removed by retention sweep
 	// contentStart holds IDs whose StartedAt came from source content rather
 	// than the Discover-time handle (see mergeStartedAt).
 	contentStart map[string]struct{}
@@ -51,11 +51,20 @@ func New(opts ...Option) (*Monitor, error) {
 		cfg:          cfg,
 		pollSem:      make(chan struct{}, 1),
 		store:        make(map[string]session.SessionState),
-		cursors:      make(map[string]source.Cursor),
+		cursors:      make(map[string]cursorEntry),
 		removed:      make(map[string]struct{}),
 		contentStart: make(map[string]struct{}),
 		health:       make(map[string]*sourceHealth),
 	}, nil
+}
+
+// cursorEntry is a session's opaque cursor plus the bookkeeping
+// forgetUndiscovered needs.
+type cursorEntry struct {
+	cursor   source.Cursor
+	source   string
+	id       string
+	lastSeen time.Time // last poll whose Discover returned the session
 }
 
 // cursorKey returns the map key for a session's cursor, scoped by source name.
@@ -84,6 +93,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		lifecycles   []session.LifecycleEvent
 		healthEvents []Health
 		completions  []subagentCompletion
+		discovered   = make(map[string]struct{}) // sources whose Discover succeeded
 	)
 
 	for i := 0; i < len(m.cfg.sources); i++ {
@@ -110,6 +120,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			}
 			continue
 		}
+		discovered[srcName] = struct{}{}
 
 		for j := 0; j < len(handles); j++ {
 			if err := ctx.Err(); err != nil {
@@ -120,7 +131,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			cKey := cursorKey(srcName, h.ID)
 
 			m.mu.Lock()
-			cursor := m.cursors[cKey]
+			cursor := m.cursors[cKey].cursor
 			m.mu.Unlock()
 
 			update, newCursor, parseErr := src.Parse(ctx, h, cursor)
@@ -142,7 +153,12 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			// it was given, so empty batches and errors must not drop an
 			// advance (design rule 5: never inspect or compare a Cursor).
 			m.mu.Lock()
-			m.cursors[cKey] = newCursor
+			m.cursors[cKey] = cursorEntry{
+				cursor:   newCursor,
+				source:   srcName,
+				id:       h.ID,
+				lastSeen: m.cfg.clock.Now(),
+			}
 			m.mu.Unlock()
 
 			if parseErr != nil {
@@ -361,6 +377,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			Reason:    "retention expired",
 		})
 	}
+	m.forgetUndiscovered(now, discovered)
 	m.mu.Unlock()
 
 	// Deliver events to sinks outside any lock.
@@ -456,6 +473,43 @@ func (m *Monitor) snapshotHealth(name string, sh *sourceHealth) Health {
 		LastError:        sh.lastError,
 		SkippedLines:     sh.skippedLines,
 		UpdatedAt:        sh.updatedAt,
+	}
+}
+
+// forgetUndiscovered drops the cursor and removed-ID entries of sessions that
+// are not in the store and that their source has not reported for the
+// retention window. Only a source whose Discover succeeded this poll vouches
+// for a session's absence. A forgotten session that reappears is re-read from
+// a zero cursor into an empty store and reported as Discovered, so nothing is
+// counted twice. Must be called with m.mu held.
+func (m *Monitor) forgetUndiscovered(now time.Time, discovered map[string]struct{}) {
+	forgot := false
+	for key, e := range m.cursors {
+		if _, ok := discovered[e.source]; !ok {
+			continue
+		}
+		if _, stored := m.store[e.id]; stored {
+			continue
+		}
+		if now.Sub(e.lastSeen) < m.cfg.completionRetention {
+			continue
+		}
+		delete(m.cursors, key)
+		forgot = true
+	}
+	if !forgot {
+		return
+	}
+	// A removed ID must outlive every cursor for it: the resume path relies
+	// on it to re-read a revived session from zero.
+	live := make(map[string]struct{}, len(m.cursors))
+	for _, e := range m.cursors {
+		live[e.id] = struct{}{}
+	}
+	for id := range m.removed {
+		if _, ok := live[id]; !ok {
+			delete(m.removed, id)
+		}
 	}
 }
 
