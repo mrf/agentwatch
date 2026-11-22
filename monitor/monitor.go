@@ -121,6 +121,18 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 
 			update, newCursor, parseErr := src.Parse(ctx, h, cursor)
 
+			// A removed session's state is gone but its cursor is kept, so
+			// the batch that revives it holds only incremental deltas. Re-read
+			// from a zero cursor to rebuild whole-history counts and
+			// StartedAt. On a failed re-read keep the pre-resume cursor so
+			// the next poll retries the same path.
+			if parseErr == nil && update.SessionID != "" && m.isRemoved(h.ID) {
+				update, newCursor, parseErr = src.Parse(ctx, h, "")
+				if parseErr != nil {
+					newCursor = cursor
+				}
+			}
+
 			// Persist the returned cursor unconditionally: the source
 			// contract says a source that wants a retry returns the cursor
 			// it was given, so empty batches and errors must not drop an
@@ -439,6 +451,13 @@ func (m *Monitor) snapshotHealth(name string, sh *sourceHealth) Health {
 		LastError:        sh.lastError,
 		UpdatedAt:        sh.updatedAt,
 	}
+}
+
+func (m *Monitor) isRemoved(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.removed[id]
+	return ok
 }
 
 // updateHealth applies fn to the source's health state under m.mu, recomputes

@@ -1471,6 +1471,12 @@ func TestTransition_RemovedToActive_Resumed(t *testing.T) {
 		Activity:  session.ActivityWorking,
 		Model:     "opus-2",
 	}, "c3")
+	// Second result serves the whole-history re-read a resume triggers.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "opus-2",
+	}, "c3")
 	if err := m.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce 4: %v", err)
 	}
@@ -1710,6 +1716,12 @@ func TestTransition_FullLifecycle(t *testing.T) {
 
 	// Step 6: resumed from removed.
 	clk.Advance(time.Second)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "opus-2",
+	}, "c4")
+	// Second result serves the whole-history re-read a resume triggers.
 	src.AddUpdate("s1", source.SourceUpdate{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
@@ -2303,6 +2315,12 @@ func TestRun_RemovedSessionResumes(t *testing.T) {
 	}
 
 	// Queue new data for the removed session.
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Activity:  session.ActivityWorking,
+		Model:     "sonnet",
+	}, "c3")
+	// Second result serves the whole-history re-read a resume triggers.
 	src.AddUpdate("s1", source.SourceUpdate{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
