@@ -3,7 +3,7 @@
 [![Go Report Card](https://goreportcard.com/badge/github.com/mrf/agentwatch)](https://goreportcard.com/report/github.com/mrf/agentwatch)
 [![Go Reference](https://pkg.go.dev/badge/github.com/mrf/agentwatch.svg)](https://pkg.go.dev/github.com/mrf/agentwatch)
 
-A Go library for monitoring multiple local AI coding agents — Claude Code, OpenAI Codex CLI, Gemini CLI, and anything you can write a `Source` for.
+A Go library for monitoring multiple local AI coding agents — Claude Code, OpenAI Codex CLI, Cursor, OpenCode, Pi, Antigravity CLI, and anything you can write a `Source` for.
 
 ## Overview
 
@@ -25,7 +25,7 @@ Pre-release. API is not yet stable.
 go get github.com/mrf/agentwatch
 ```
 
-Requires Go 1.25+.
+Requires Go 1.26+.
 
 ## Quickstart
 
@@ -113,7 +113,7 @@ if err := mon.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 | `WithSources(srcs...)` | required | Session data providers |
 | `WithSink(sink)` | nil | Event receiver |
 | `WithPollInterval(d)` | — | Interval for `Run` |
-| `WithLogger(l)` | discard | `*slog.Logger` |
+| `WithLogger(l)` | `slog.Default()` | `*slog.Logger` |
 | `WithStaleThreshold(d)` | 5 min | Time before a silent session goes terminal |
 | `WithCompletionRetention(d)` | 30 s | How long terminal sessions stay visible |
 | `WithHealthThreshold(n)` | 3 | Consecutive failures before status degrades |
@@ -186,7 +186,10 @@ wsSrv, err := wsapi.NewServer(mon)
 |---------|-------|-----------|
 | `sources/claude` | Claude Code | `*.jsonl` files under a projects directory |
 | `sources/codex` | OpenAI Codex CLI | `sessions/YYYY/MM/DD/rollout-*.jsonl` under CODEX_HOME |
-| `sources/gemini` | Gemini CLI | `checkpoint.json` files one level below the root |
+| `sources/cursor` | Cursor | `projects/<name>/agent-transcripts/<id>.jsonl` (flat or nested) under the Cursor data directory |
+| `sources/opencode` | OpenCode | SQLite database, opened read-only via `WithDBPath` |
+| `sources/pi` | Pi | `<timestamp>_<uuid>.jsonl` files in per-project directories under the sessions directory |
+| `sources/antigravity` | Antigravity CLI | `<uuid>.json` session files under the root |
 | `sources/mock` | Test double | Programmatic control via `QueueHandles`, `QueueParseResult` |
 
 ## Examples

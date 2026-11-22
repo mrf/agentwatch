@@ -211,4 +211,4 @@ The built-in sources are concrete examples:
 |--------|-------------|--------|
 | `sources/claude` | JSON `{offset, subagentParents}` | Append-only JSONL |
 | `sources/codex` | Decimal byte offset | Append-only JSONL |
-| `sources/gemini` | `mtime_ns,msg_count,tool_count` | Rewrite-on-save JSON |
+| `sources/antigravity` | `mtime_ns,msg_count,tool_count` | Rewrite-on-save JSON |
