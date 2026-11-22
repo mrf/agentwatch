@@ -126,14 +126,10 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 
 // Parse implements source.Source. The cursor is a jsonl.Position in the
 // transcript file; an empty cursor means start from zero. If the file was
-// truncated or replaced, it is re-read from the start as a Reset update.
+// truncated or replaced, or the cursor is unparseable, it is re-read from the
+// start as a Reset update.
 func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
-	pos, err := jsonl.ParsePosition(string(c))
-	if err != nil {
-		return source.SourceUpdate{}, c, fmt.Errorf("cursor: invalid cursor %q: %w", c, err)
-	}
-
-	res, nextPos, reset, err := jsonl.ReadFrom(h.Path, pos, jsonl.Options{})
+	res, nextPos, reset, err := jsonl.ReadFromCursor(h.Path, string(c), jsonl.Options{})
 	if err != nil {
 		return source.SourceUpdate{}, c, fmt.Errorf("cursor: read %s: %w", h.Path, err)
 	}

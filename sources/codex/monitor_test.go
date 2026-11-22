@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/mrf/agentwatch/internal/clock"
+	"github.com/mrf/agentwatch/internal/testutil"
 	"github.com/mrf/agentwatch/monitor"
 	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/sources/codex"
@@ -124,4 +125,36 @@ func TestMonitorAppliesLaterBatches(t *testing.T) {
 	if s.Lifecycle != session.LifecycleTerminal {
 		t.Errorf("Lifecycle = %q after quiet period, want terminal", s.Lifecycle)
 	}
+}
+
+// TestMonitorRecoversFromCorruptCursor: a cursor damaged between polls must
+// make the source re-read the file as a Reset, so the monitor replaces the
+// counts instead of adding the whole file a second time.
+func TestMonitorRecoversFromCorruptCursor(t *testing.T) {
+	root, _ := writeRollout(t, liveSessionID, liveBatch1+liveBatch2)
+	src := &testutil.CorruptingSource{Source: codex.New(codex.WithRoot(root))}
+	clk := clock.NewFake(time.Date(2026, 11, 9, 10, 0, 5, 0, time.UTC))
+	m, err := monitor.New(monitor.WithSources(src), monitor.WithClock(clk))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	want := onlySession(t, m)
+	assertInt(t, "MessageCount", want.MessageCount, 2)
+
+	src.SetCorrupt(true)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	src.SetCorrupt(false)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	got := onlySession(t, m)
+	assertInt(t, "MessageCount after corrupt cursor", got.MessageCount, want.MessageCount)
+	assertInt(t, "ToolCallCount after corrupt cursor", got.ToolCallCount, want.ToolCallCount)
 }

@@ -234,14 +234,35 @@ func TestParseCursorAdvances(t *testing.T) {
 	}
 }
 
+// An unparseable cursor can never become valid by retrying, so Parse re-reads
+// the file from the start as a Reset update instead of failing forever.
 func TestParseInvalidCursor(t *testing.T) {
-	root, h := writeSession(t, "abc12345", sessionHeaderFixture("abc12345"))
-
+	root, h := writeSession(t, "full001", fullSessionFixture)
 	src := pi.New(pi.WithRoot(root))
+	ctx := context.Background()
 
-	_, _, err := src.Parse(context.Background(), h, source.Cursor("not-a-number"))
-	if err == nil {
-		t.Error("expected error for invalid cursor")
+	fresh, _, err := src.Parse(ctx, h, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, c, err := src.Parse(ctx, h, source.Cursor("not-a-number"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !u.Reset {
+		t.Error("Reset = false; the re-read would double-count")
+	}
+	if u.MessageCountDelta == 0 || u.MessageCountDelta != fresh.MessageCountDelta ||
+		u.ToolCallCountDelta != fresh.ToolCallCountDelta {
+		t.Errorf("counts = %d msgs/%d tools, want absolute %d/%d",
+			u.MessageCountDelta, u.ToolCallCountDelta, fresh.MessageCountDelta, fresh.ToolCallCountDelta)
+	}
+	u, _, err = src.Parse(ctx, h, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Reset || u.MessageCountDelta != 0 {
+		t.Errorf("after recovery: Reset=%v msgs=%d, want a plain idle poll", u.Reset, u.MessageCountDelta)
 	}
 }
 

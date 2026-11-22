@@ -174,17 +174,35 @@ func TestParseCursorAdvances(t *testing.T) {
 	}
 }
 
+// An unparseable cursor can never become valid by retrying, so Parse re-reads
+// the file from the start as a Reset update instead of failing forever.
 func TestParseInvalidCursor(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "rollout-0-01234567-abcd-ef01-2345-67890abcdef0.jsonl")
-	mustWriteFile(t, path, `{}`)
+	root, h := writeRollout(t, "01234567-abcd-ef01-2345-67890abcdef0", newEnvelopeFixture)
+	src := codex.New(codex.WithRoot(root))
+	ctx := context.Background()
 
-	src := codex.New(codex.WithRoot(dir))
-	h := source.SessionHandle{ID: "x", Path: path, Source: "codex"}
-
-	_, _, err := src.Parse(context.Background(), h, source.Cursor("not-a-number"))
-	if err == nil {
-		t.Error("expected error for invalid cursor")
+	fresh, _, err := src.Parse(ctx, h, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	u, c, err := src.Parse(ctx, h, source.Cursor("not-a-number"))
+	if err != nil {
+		t.Fatalf("Parse: %v", err)
+	}
+	if !u.Reset {
+		t.Error("Reset = false; the re-read would double-count")
+	}
+	if u.MessageCountDelta == 0 || u.MessageCountDelta != fresh.MessageCountDelta ||
+		u.ToolCallCountDelta != fresh.ToolCallCountDelta {
+		t.Errorf("counts = %d msgs/%d tools, want absolute %d/%d",
+			u.MessageCountDelta, u.ToolCallCountDelta, fresh.MessageCountDelta, fresh.ToolCallCountDelta)
+	}
+	u, _, err = src.Parse(ctx, h, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if u.Reset || u.MessageCountDelta != 0 {
+		t.Errorf("after recovery: Reset=%v msgs=%d, want a plain idle poll", u.Reset, u.MessageCountDelta)
 	}
 }
 

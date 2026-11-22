@@ -65,6 +65,19 @@ func ParsePosition(s string) (Position, error) {
 	return p, nil
 }
 
+// ReadFromCursor is ReadFrom for a cursor string produced by Position.Encode.
+// A cursor that does not parse can never become valid by retrying, so it is
+// treated like a rewritten file: the file is re-read from the start and reset
+// is true, which makes the returned position a fresh, valid cursor.
+func ReadFromCursor(path, cursor string, opts Options) (res Result, next Position, reset bool, err error) {
+	pos, perr := ParsePosition(cursor)
+	if perr != nil {
+		res, next, _, err = ReadFrom(path, Position{}, opts)
+		return res, next, err == nil, err
+	}
+	return ReadFrom(path, pos, opts)
+}
+
 // Validate reports an error if p could not have come from ReadFrom.
 func (p Position) Validate() error {
 	if p.Offset < 0 || p.HeadLen < 0 || p.HeadLen > maxHeadLen || int64(p.HeadLen) > p.Offset {
