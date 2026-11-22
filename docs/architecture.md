@@ -152,7 +152,7 @@ policy := session.Policy{
 safe := policy.Apply(state)
 ```
 
-Health error strings are sanitized internally (absolute paths replaced with `<path>`) before they leave the monitor.
+`Health.LastError` is a fixed category (`monitor.LastError*` constants), never the underlying error text, so no paths or panic details can leave the monitor through it. Detailed errors go to the configured logger.
 
 ### Multiple sinks
 

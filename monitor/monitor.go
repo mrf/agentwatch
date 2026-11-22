@@ -100,7 +100,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			)
 
 			if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
-				sh.recordDiscoverFailure(sanitizeError(err.Error()), threshold)
+				sh.recordDiscoverFailure(discoverErrorCategory(err), threshold)
 			}); changed {
 				healthEvents = append(healthEvents, h)
 			}

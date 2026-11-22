@@ -1,8 +1,9 @@
 package monitor
 
 import (
-	"regexp"
-	"strings"
+	"context"
+	"errors"
+	"io/fs"
 	"time"
 )
 
@@ -26,14 +27,38 @@ type Health struct {
 	DiscoverFailures int `json:"discoverFailures"`
 	// ParseFailures is the number of sessions whose parse errors have not
 	// yet recovered. These degrade a source but never fail it.
-	ParseFailures int       `json:"parseFailures"`
-	LastError     string    `json:"lastError,omitempty"`
-	UpdatedAt     time.Time `json:"updatedAt"`
+	ParseFailures int `json:"parseFailures"`
+	// LastError is the category of the most recent failure: one of the
+	// LastError* constants, or empty once the source has fully recovered.
+	// It is never free text from the underlying error, so it cannot carry
+	// paths or panic details; the detailed error goes to the monitor's
+	// logger only.
+	LastError string    `json:"lastError,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt"`
 }
 
-// parseFailureMessage is the fixed LastError for parse failures; the raw
-// parser error never leaves the process (plan §5 rule 3).
-const parseFailureMessage = "parse failure"
+// Fixed values of Health.LastError.
+const (
+	LastErrorDiscover           = "discover failed"
+	LastErrorDiscoverNotFound   = "discover failed: not found"
+	LastErrorDiscoverPermission = "discover failed: permission denied"
+	LastErrorDiscoverTimeout    = "discover failed: timeout"
+	LastErrorParse              = "parse failed"
+)
+
+// discoverErrorCategory maps a Discover error to its LastError category.
+func discoverErrorCategory(err error) string {
+	switch {
+	case errors.Is(err, fs.ErrNotExist):
+		return LastErrorDiscoverNotFound
+	case errors.Is(err, fs.ErrPermission):
+		return LastErrorDiscoverPermission
+	case errors.Is(err, context.DeadlineExceeded):
+		return LastErrorDiscoverTimeout
+	default:
+		return LastErrorDiscover
+	}
+}
 
 // sessionParseHealth tracks one session's parse errors. A session has an
 // entry only while it is unrecovered.
@@ -83,10 +108,10 @@ func computeStatus(failures, threshold int) HealthStatus {
 	return HealthHealthy
 }
 
-func (sh *sourceHealth) recordDiscoverFailure(sanitizedErr string, threshold int) {
+func (sh *sourceHealth) recordDiscoverFailure(category string, threshold int) {
 	sh.discoverSuccesses = 0
 	sh.discoverFailures++
-	sh.lastError = sanitizedErr
+	sh.lastError = category
 	if level := computeStatus(sh.discoverFailures, threshold); level == HealthFailed ||
 		(level == HealthDegraded && sh.discoverLevel == HealthHealthy) {
 		sh.discoverLevel = level
@@ -138,7 +163,7 @@ func (sh *sourceHealth) recordParseFailure(id string, threshold int) {
 	if p.failures >= threshold {
 		p.degraded = true
 	}
-	sh.lastError = parseFailureMessage
+	sh.lastError = LastErrorParse
 }
 
 func (sh *sourceHealth) recordParseSuccess(id string, threshold int) {
@@ -172,24 +197,3 @@ func (sh *sourceHealth) refresh() {
 		sh.lastError = ""
 	}
 }
-
-// sanitizeError removes absolute paths and panic details from error strings
-// before they leave the process (plan §5 rule 3).
-func sanitizeError(msg string) string {
-	// Replace panic stacktraces with "internal error".
-	if strings.Contains(msg, "panic:") || strings.Contains(msg, "goroutine") {
-		return "internal error"
-	}
-
-	// Replace absolute Unix paths.
-	msg = unixPathRe.ReplaceAllString(msg, "<path>")
-	// Replace absolute Windows paths.
-	msg = windowsPathRe.ReplaceAllString(msg, "<path>")
-
-	return msg
-}
-
-var (
-	unixPathRe    = regexp.MustCompile(`/[a-zA-Z0-9_./-]+`)
-	windowsPathRe = regexp.MustCompile(`[A-Z]:\\[a-zA-Z0-9_.\\-]+`)
-)

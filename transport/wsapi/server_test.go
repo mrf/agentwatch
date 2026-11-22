@@ -3,6 +3,7 @@ package wsapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -365,6 +366,45 @@ func TestServer_HealthEvent(t *testing.T) {
 	}
 	if got.Health.Status != monitor.HealthDegraded {
 		t.Fatalf("expected degraded, got %s", got.Health.Status)
+	}
+}
+
+func TestServer_HealthEventLastErrorIsFixedCategory(t *testing.T) {
+	src := mock.New(mock.WithName("test-source"))
+	var srv *wsapi.Server
+	mon, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithHealthThreshold(1),
+		monitor.WithSink(monitor.EventSinkFunc(func(ctx context.Context, ev monitor.Event) error {
+			return srv.HandleEvent(ctx, ev)
+		})),
+	)
+	if err != nil {
+		t.Fatalf("monitor.New: %v", err)
+	}
+	srv, err = wsapi.NewServer(mon)
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+	ts := httptest.NewServer(srv)
+	t.Cleanup(func() {
+		srv.Stop()
+		ts.Close()
+	})
+	conn := dialWS(t, ts)
+	readEvent(t, conn) // snapshot
+
+	src.QueueDiscoverError(errors.New(`scan /home/u/My Projects/x and C:\Users\Jane Doe\y: read/write`))
+	if err := mon.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+
+	got := readEvent(t, conn)
+	if got.Type != monitor.EventHealth || got.Health == nil {
+		t.Fatalf("expected health event, got %+v", got)
+	}
+	if got.Health.LastError != monitor.LastErrorDiscover {
+		t.Fatalf("LastError = %q, want %q", got.Health.LastError, monitor.LastErrorDiscover)
 	}
 }
 
