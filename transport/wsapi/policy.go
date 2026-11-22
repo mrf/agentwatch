@@ -17,17 +17,19 @@ func applyPolicy(p session.Policy, ev monitor.Event) monitor.Event {
 	ev.Sessions = applyPolicyStates(p, ev.Sessions)
 	ev.Updates = applyPolicyStates(p, ev.Updates)
 
-	if p.RedactSessionID && ev.Removed != nil {
-		// Keep the count so clients can tell removals happened, but drop
-		// the identifiers.
-		ev.Removed = make([]string, len(ev.Removed))
+	if ev.Removed != nil {
+		// Keep the count so clients can tell removals happened even when the
+		// identifiers are blanked.
+		removed := make([]string, len(ev.Removed))
+		for i := 0; i < len(removed); i++ {
+			removed[i] = p.SessionID(ev.Removed[i])
+		}
+		ev.Removed = removed
 	}
 
 	if ev.Lifecycle != nil {
 		lc := *ev.Lifecycle
-		if p.RedactSessionID {
-			lc.SessionID = ""
-		}
+		lc.SessionID = p.SessionID(lc.SessionID)
 		if p.RedactSource {
 			lc.Source = ""
 		}
