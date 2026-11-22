@@ -341,8 +341,35 @@ func TestParseActivityMapping(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	if u.Activity != session.ActivityWaiting {
-		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWaiting)
+	if u.Activity != session.ActivityWorking {
+		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWorking)
+	}
+}
+
+func TestParseEventMsgActivityTable(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want session.Activity
+	}{
+		{"user_message", `{"type":"event_msg","payload":{"type":"user_message","payload":{"text":"go"}}}`, session.ActivityWorking},
+		{"agent_message", `{"type":"event_msg","payload":{"type":"agent_message","payload":{"text":"hi"}}}`, session.ActivityWorking},
+		{"agent_reasoning", `{"type":"event_msg","payload":{"type":"agent_reasoning"}}`, session.ActivityWorking},
+		{"task_complete", `{"type":"event_msg","payload":{"type":"task_complete"}}`, session.ActivityWaiting},
+	}
+	for i := 0; i < len(tests); i++ {
+		tc := tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			content := `{"type":"session_meta","payload":{"id":"tbl","model":"o3"}}` + "\n" + tc.line + "\n"
+			dir, h := writeRollout(t, "tbl", content)
+			u, _, err := codex.New(codex.WithRoot(dir)).Parse(context.Background(), h, "")
+			if err != nil {
+				t.Fatalf("Parse error: %v", err)
+			}
+			if u.Activity != tc.want {
+				t.Errorf("Activity = %q, want %q", u.Activity, tc.want)
+			}
+		})
 	}
 }
 

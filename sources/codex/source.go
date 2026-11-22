@@ -301,8 +301,8 @@ func parseEnvelope(typ string, payload json.RawMessage, a *accumulator) {
 		// Messages are counted from response_item only: real rollouts write
 		// each one to both streams, so counting here would double them.
 		case "user_message":
-			a.activity = session.ActivityWaiting
-		case "agent_message":
+			a.activity = session.ActivityWorking
+		case "agent_message": // mid-turn commentary too; task_complete ends the turn
 			a.activity = session.ActivityWorking
 		case "agent_reasoning":
 			a.activity = session.ActivityWorking

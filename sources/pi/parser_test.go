@@ -68,9 +68,9 @@ func TestParseLinesSimpleSession(t *testing.T) {
 	if acc.toolCallDelta != 0 {
 		t.Errorf("toolCallDelta: got %d, want 0", acc.toolCallDelta)
 	}
-	// last message is assistant → ActivityWorking
-	if acc.activity != session.ActivityWorking {
-		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWorking)
+	// last message is assistant with stopReason end_turn → ActivityWaiting
+	if acc.activity != session.ActivityWaiting {
+		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWaiting)
 	}
 	wantStart, _ := time.Parse(time.RFC3339, "2024-01-15T10:00:00Z")
 	if !acc.startedAt.Equal(wantStart) {
@@ -131,9 +131,9 @@ func TestParseLinesModelChange(t *testing.T) {
 	if acc.model != "claude-opus-4-6" {
 		t.Errorf("model: got %q, want %q", acc.model, "claude-opus-4-6")
 	}
-	// last entry is a user message → ActivityWaiting
-	if acc.activity != session.ActivityWaiting {
-		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWaiting)
+	// last entry is a user message → ActivityWorking
+	if acc.activity != session.ActivityWorking {
+		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWorking)
 	}
 	// 1 assistant + 1 user = 2
 	if acc.messageDelta != 2 {
@@ -183,21 +183,8 @@ func TestParseLineSessionHeader(t *testing.T) {
 	}
 }
 
-func TestParseLineUserMessageSetsWaiting(t *testing.T) {
+func TestParseLineUserMessageSetsWorking(t *testing.T) {
 	line := []byte(`{"type":"message","id":"m1","parentId":"s1","timestamp":"2024-06-01T09:01:00Z","message":{"role":"user","content":"hello"}}`)
-	var acc accumulator
-	parseLine(line, false, &acc)
-
-	if acc.messageDelta != 1 {
-		t.Errorf("messageDelta: got %d, want 1", acc.messageDelta)
-	}
-	if acc.activity != session.ActivityWaiting {
-		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWaiting)
-	}
-}
-
-func TestParseLineAssistantMessageSetsWorking(t *testing.T) {
-	line := []byte(`{"type":"message","id":"m2","parentId":"m1","timestamp":"2024-06-01T09:02:00Z","message":{"role":"assistant","model":"claude-opus-4-6","usage":{"input":500,"output":100,"cacheRead":50,"cacheWrite":20},"stopReason":"end_turn"}}`)
 	var acc accumulator
 	parseLine(line, false, &acc)
 
@@ -206,6 +193,19 @@ func TestParseLineAssistantMessageSetsWorking(t *testing.T) {
 	}
 	if acc.activity != session.ActivityWorking {
 		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWorking)
+	}
+}
+
+func TestParseLineAssistantMessageSetsWaiting(t *testing.T) {
+	line := []byte(`{"type":"message","id":"m2","parentId":"m1","timestamp":"2024-06-01T09:02:00Z","message":{"role":"assistant","model":"claude-opus-4-6","usage":{"input":500,"output":100,"cacheRead":50,"cacheWrite":20},"stopReason":"end_turn"}}`)
+	var acc accumulator
+	parseLine(line, false, &acc)
+
+	if acc.messageDelta != 1 {
+		t.Errorf("messageDelta: got %d, want 1", acc.messageDelta)
+	}
+	if acc.activity != session.ActivityWaiting {
+		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWaiting)
 	}
 	if acc.model != "claude-opus-4-6" {
 		t.Errorf("model: got %q, want %q", acc.model, "claude-opus-4-6")
@@ -313,5 +313,31 @@ func TestParseLineTimestampTracking(t *testing.T) {
 	wantLast, _ := time.Parse(time.RFC3339, "2024-06-01T09:02:30Z")
 	if !acc.lastActivityAt.Equal(wantLast) {
 		t.Errorf("lastActivityAt: got %v, want %v", acc.lastActivityAt, wantLast)
+	}
+}
+
+func TestParseLineAssistantStopReasonActivity(t *testing.T) {
+	tests := []struct {
+		stopReason string
+		want       session.Activity
+	}{
+		{"end_turn", session.ActivityWaiting},
+		{"stop", session.ActivityWaiting},
+		{"length", session.ActivityWaiting},
+		{"error", session.ActivityWaiting},
+		{"aborted", session.ActivityWaiting},
+		{"toolUse", session.ActivityWorking},
+		{"", session.ActivityWorking},
+	}
+	for i := 0; i < len(tests); i++ {
+		tc := tests[i]
+		t.Run("stopReason="+tc.stopReason, func(t *testing.T) {
+			line := `{"type":"message","id":"m","timestamp":"2024-06-01T09:02:00Z","message":{"role":"assistant","stopReason":"` + tc.stopReason + `"}}`
+			var acc accumulator
+			parseLine([]byte(line), false, &acc)
+			if acc.activity != tc.want {
+				t.Errorf("activity: got %q, want %q", acc.activity, tc.want)
+			}
+		})
 	}
 }

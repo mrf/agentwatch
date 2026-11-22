@@ -257,7 +257,7 @@ func TestParseTerminalSession(t *testing.T) {
 	}
 }
 
-func TestParseActivityWaiting(t *testing.T) {
+func TestParseActivityUserMessage(t *testing.T) {
 	dbPath := seedFileDB(t, func(db *sql.DB) {
 		insertSession(t, db, "sess-1", "", "/project",
 			`{"id":"model"}`, 100, 10,
@@ -273,8 +273,8 @@ func TestParseActivityWaiting(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	if u.Activity != session.ActivityWaiting {
-		t.Errorf("Activity = %q, want %q (user message, no tools)", u.Activity, session.ActivityWaiting)
+	if u.Activity != session.ActivityWorking {
+		t.Errorf("Activity = %q, want %q (user message awaiting reply)", u.Activity, session.ActivityWorking)
 	}
 }
 

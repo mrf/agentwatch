@@ -40,10 +40,31 @@ func parseLine(line []byte, a *accumulator) {
 	a.messageDelta++
 	switch tl.Role {
 	case "user":
-		// User message arrived; agent has not yet responded.
-		a.activity = session.ActivityWaiting
-	case "assistant":
-		// Assistant is generating or has generated a response.
 		a.activity = session.ActivityWorking
+	case "assistant":
+		// Transcripts carry no stop marker, so a text-only assistant message
+		// is read as the end of the turn; one with a tool_use block is not.
+		if hasToolUse(tl.Message) {
+			a.activity = session.ActivityWorking
+		} else {
+			a.activity = session.ActivityWaiting
+		}
 	}
+}
+
+func hasToolUse(raw json.RawMessage) bool {
+	var m struct {
+		Content []struct {
+			Type string `json:"type"`
+		} `json:"content"`
+	}
+	if json.Unmarshal(raw, &m) != nil {
+		return false
+	}
+	for i := 0; i < len(m.Content); i++ {
+		if m.Content[i].Type == "tool_use" {
+			return true
+		}
+	}
+	return false
 }

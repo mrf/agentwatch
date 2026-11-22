@@ -30,8 +30,9 @@ const (
 
 // cursor records what was last reported for a session, so Parse can return a
 // zero update when nothing changed.
-// Format: "<msgs>,<tools>,<tokensIn>,<tokensOut>,<lastActivityUnixNano>,<archive>".
-// The legacy two-field form "<msgs>,<tools>" is still accepted.
+// Format: "<msgs>,<tools>,<tokensIn>,<tokensOut>,<lastActivityUnixNano>,<archive>,<working>".
+// The shorter forms "<msgs>,<tools>" and the six-field form without
+// <working> are still accepted.
 type cursor struct {
 	msgCount     int
 	toolCount    int
@@ -39,6 +40,9 @@ type cursor struct {
 	tokensOutput int
 	lastActivity int64
 	archive      archiveState
+	// working is true when the last report had an assistant reply in flight,
+	// so its completion is reported even if no other field moved.
+	working bool
 	// seen is true for any decoded (non-empty) cursor; it is implied by the
 	// encoding, not stored in it.
 	seen bool
@@ -47,7 +51,15 @@ type cursor struct {
 func encodeCursor(c cursor) string {
 	return strconv.Itoa(c.msgCount) + "," + strconv.Itoa(c.toolCount) + "," +
 		strconv.Itoa(c.tokensInput) + "," + strconv.Itoa(c.tokensOutput) + "," +
-		strconv.FormatInt(c.lastActivity, 10) + "," + strconv.Itoa(int(c.archive))
+		strconv.FormatInt(c.lastActivity, 10) + "," + strconv.Itoa(int(c.archive)) + "," +
+		strconv.Itoa(boolToInt(c.working))
+}
+
+func boolToInt(b bool) int {
+	if b {
+		return 1
+	}
+	return 0
 }
 
 func decodeCursor(s string) (cursor, error) {
@@ -55,10 +67,10 @@ func decodeCursor(s string) (cursor, error) {
 		return cursor{}, nil
 	}
 	parts := strings.Split(s, ",")
-	if len(parts) != 2 && len(parts) != 6 {
+	if len(parts) != 2 && len(parts) != 6 && len(parts) != 7 {
 		return cursor{}, fmt.Errorf("opencode: invalid cursor %q", s)
 	}
-	var n [6]int64
+	var n [7]int64
 	for i := 0; i < len(parts); i++ {
 		v, err := strconv.ParseInt(parts[i], 10, 64)
 		if err != nil {
@@ -69,6 +81,9 @@ func decodeCursor(s string) (cursor, error) {
 	if n[5] < int64(archiveNone) || n[5] > int64(archiveConfirmed) {
 		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: bad archive state", s)
 	}
+	if n[6] != 0 && n[6] != 1 {
+		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: bad working flag", s)
+	}
 	return cursor{
 		msgCount:     int(n[0]),
 		toolCount:    int(n[1]),
@@ -76,6 +91,7 @@ func decodeCursor(s string) (cursor, error) {
 		tokensOutput: int(n[3]),
 		lastActivity: n[4],
 		archive:      archiveState(n[5]),
+		working:      n[6] == 1,
 		seen:         true,
 	}, nil
 }
@@ -168,6 +184,11 @@ type parseResult struct {
 	toolDelta    int
 	currentTool  string
 	lastRole     string
+	// inProgress: the latest message is an assistant reply still being
+	// written. replyDone: it carries an explicit stop marker. Neither is set
+	// for an assistant message with no marker at all.
+	inProgress bool
+	replyDone  bool
 	// changed is false when there is nothing new to report; the caller then
 	// returns a zero update.
 	changed bool
@@ -246,14 +267,28 @@ func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur curso
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return parseResult{}, cur, fmt.Errorf("opencode: query latest message: %w", err)
 	}
+	var state messageState
 	if msgData.Valid {
-		lastRole = extractMessageRole(msgData.String)
+		state = extractMessageState(msgData.String)
+		lastRole = state.role
 	}
 	if msgUpdatedAt.Valid {
 		lastActivity = parseTimestamp(msgUpdatedAt.String)
 	}
 	if lastActivity.IsZero() {
 		lastActivity = parseTimestamp(s.updatedAt)
+	}
+
+	// Streaming rewrites parts, not messages, so the newest part write counts
+	// as activity too.
+	var partUpdatedAt sql.NullString
+	if err := db.QueryRowContext(ctx,
+		`SELECT MAX(updated_at) FROM part WHERE session_id = ?`, sessionID,
+	).Scan(&partUpdatedAt); err != nil {
+		return parseResult{}, cur, fmt.Errorf("opencode: query latest part: %w", err)
+	}
+	if t := parseTimestamp(nullStr(partUpdatedAt)); t.After(lastActivity) {
+		lastActivity = t
 	}
 
 	// Compute deltas (clamp to zero for safety).
@@ -280,6 +315,8 @@ func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur curso
 		toolDelta:    toolDelta,
 		currentTool:  currentTool,
 		lastRole:     lastRole,
+		inProgress:   state.inProgress,
+		replyDone:    state.replyDone,
 	}
 
 	newCur := cursor{
@@ -287,6 +324,7 @@ func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur curso
 		toolCount:    toolCount,
 		tokensInput:  s.tokensInput,
 		tokensOutput: s.tokensOutput,
+		working:      state.inProgress,
 		seen:         true,
 	}
 	if !lastActivity.IsZero() {
@@ -342,6 +380,44 @@ func extractMessageRole(data string) string {
 		return msg.Role
 	}
 	return ""
+}
+
+// messageState is what a message's data JSON says about turn progress.
+type messageState struct {
+	role       string
+	inProgress bool
+	replyDone  bool
+}
+
+// extractMessageState reads OpenCode's assistant-message markers: finish
+// "tool-calls" means the step ended but the turn continues; any other finish,
+// or time.completed, ends the reply; time.created without either means the
+// reply is still streaming. A message with no markers is left undecided.
+func extractMessageState(data string) messageState {
+	var msg struct {
+		Role   string `json:"role"`
+		Finish string `json:"finish"`
+		Time   struct {
+			Created   float64 `json:"created"`
+			Completed float64 `json:"completed"`
+		} `json:"time"`
+	}
+	if json.Unmarshal([]byte(data), &msg) != nil {
+		return messageState{}
+	}
+	st := messageState{role: msg.Role}
+	if msg.Role != "assistant" {
+		return st
+	}
+	switch {
+	case msg.Finish == "tool-calls":
+		st.inProgress = true
+	case msg.Finish != "" || msg.Time.Completed > 0:
+		st.replyDone = true
+	case msg.Time.Created > 0:
+		st.inProgress = true
+	}
+	return st
 }
 
 // parseTimestamp parses a timestamp string from the SQLite database.

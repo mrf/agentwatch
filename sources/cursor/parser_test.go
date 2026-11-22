@@ -16,8 +16,8 @@ func TestParseLineUserMessage(t *testing.T) {
 	if acc.messageDelta != 1 {
 		t.Errorf("messageDelta = %d, want 1", acc.messageDelta)
 	}
-	if acc.activity != session.ActivityWaiting {
-		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWaiting)
+	if acc.activity != session.ActivityWorking {
+		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWorking)
 	}
 }
 
@@ -29,8 +29,32 @@ func TestParseLineAssistantMessage(t *testing.T) {
 	if acc.messageDelta != 1 {
 		t.Errorf("messageDelta = %d, want 1", acc.messageDelta)
 	}
-	if acc.activity != session.ActivityWorking {
-		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWorking)
+	if acc.activity != session.ActivityWaiting {
+		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWaiting)
+	}
+}
+
+func TestParseLineActivityTable(t *testing.T) {
+	tests := []struct {
+		name string
+		line string
+		want session.Activity
+	}{
+		{"user text", `{"role":"user","message":{"content":[{"type":"text","text":"go"}]}}`, session.ActivityWorking},
+		{"assistant text only", `{"role":"assistant","message":{"content":[{"type":"text","text":"done"}]}}`, session.ActivityWaiting},
+		{"assistant with tool_use", `{"role":"assistant","message":{"content":[{"type":"text","text":"x"},{"type":"tool_use","name":"Read"}]}}`, session.ActivityWorking},
+		{"assistant empty content", `{"role":"assistant","message":{"content":[]}}`, session.ActivityWaiting},
+		{"assistant no message", `{"role":"assistant"}`, session.ActivityWaiting},
+	}
+	for i := 0; i < len(tests); i++ {
+		tc := tests[i]
+		t.Run(tc.name, func(t *testing.T) {
+			var acc accumulator
+			parseLine([]byte(tc.line), &acc)
+			if acc.activity != tc.want {
+				t.Errorf("activity = %q, want %q", acc.activity, tc.want)
+			}
+		})
 	}
 }
 
@@ -94,9 +118,9 @@ func TestAccumulatorMultipleLines(t *testing.T) {
 	if acc.messageDelta != 3 {
 		t.Errorf("messageDelta = %d, want 3", acc.messageDelta)
 	}
-	// Last role was user → waiting.
-	if acc.activity != session.ActivityWaiting {
-		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWaiting)
+	// Last role was user → working.
+	if acc.activity != session.ActivityWorking {
+		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWorking)
 	}
 }
 
@@ -111,9 +135,9 @@ func TestAccumulatorLastRoleWins(t *testing.T) {
 		parseLine(lines[i], &acc)
 	}
 
-	// Last role was assistant → working.
-	if acc.activity != session.ActivityWorking {
-		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWorking)
+	// Last role was assistant (no tool_use) → waiting.
+	if acc.activity != session.ActivityWaiting {
+		t.Errorf("activity = %q, want %q", acc.activity, session.ActivityWaiting)
 	}
 }
 

@@ -143,11 +143,17 @@ func parseMessage(raw json.RawMessage, a *accumulator) {
 	switch msg.Role {
 	case "user":
 		a.messageDelta++
-		a.activity = session.ActivityWaiting
+		a.activity = session.ActivityWorking
 
 	case "assistant":
 		a.messageDelta++
-		a.activity = session.ActivityWorking
+		// toolUse (or no stop reason yet) means the turn continues; any other
+		// stop reason ends it.
+		if msg.StopReason == "" || msg.StopReason == "toolUse" {
+			a.activity = session.ActivityWorking
+		} else {
+			a.activity = session.ActivityWaiting
+		}
 		if msg.Model != "" {
 			a.model = msg.Model
 		}

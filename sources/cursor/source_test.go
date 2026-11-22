@@ -263,9 +263,9 @@ func TestParseNormalTranscript(t *testing.T) {
 	if u.MessageCountDelta != 2 {
 		t.Errorf("MessageCountDelta = %d, want 2", u.MessageCountDelta)
 	}
-	// Last role is assistant → working.
-	if u.Activity != session.ActivityWorking {
-		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWorking)
+	// Last role is assistant (text only) → waiting.
+	if u.Activity != session.ActivityWaiting {
+		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWaiting)
 	}
 	// WorkingDir comes from handle.
 	if u.WorkingDir != "/home/user/myapp" {
@@ -330,8 +330,8 @@ func TestParseOnlyUserMessages(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	if u.Activity != session.ActivityWaiting {
-		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWaiting)
+	if u.Activity != session.ActivityWorking {
+		t.Errorf("Activity = %q, want %q", u.Activity, session.ActivityWorking)
 	}
 	if u.MessageCountDelta != 2 {
 		t.Errorf("MessageCountDelta = %d, want 2", u.MessageCountDelta)
