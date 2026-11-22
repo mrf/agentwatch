@@ -4,7 +4,6 @@ package monitor
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -42,8 +41,8 @@ func New(opts ...Option) (*Monitor, error) {
 		o(&cfg)
 	}
 
-	if len(cfg.sources) == 0 {
-		return nil, errors.New("monitor: at least one source is required")
+	if err := cfg.validate(); err != nil {
+		return nil, err
 	}
 
 	return &Monitor{

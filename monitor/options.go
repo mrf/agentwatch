@@ -1,12 +1,22 @@
 package monitor
 
 import (
+	"errors"
+	"fmt"
 	"log/slog"
 	"time"
 
 	"github.com/mrf/agentwatch/internal/clock"
 	"github.com/mrf/agentwatch/source"
 )
+
+// ErrInvalidOption is matched (via errors.Is) by every error New returns for
+// an invalid configuration.
+var ErrInvalidOption = errors.New("monitor: invalid option")
+
+func invalid(format string, args ...any) error {
+	return fmt.Errorf("%w: %s", ErrInvalidOption, fmt.Sprintf(format, args...))
+}
 
 // Option configures a Monitor.
 type Option func(*config)
@@ -92,4 +102,30 @@ func WithHealthThreshold(n int) Option {
 	return func(c *config) {
 		c.healthThreshold = n
 	}
+}
+
+func (c *config) validate() error {
+	if len(c.sources) == 0 {
+		return invalid("at least one source is required")
+	}
+	for i := 0; i < len(c.sources); i++ {
+		if c.sources[i] == nil {
+			return invalid("WithSources: source %d is nil", i)
+		}
+	}
+	switch {
+	case c.pollInterval <= 0:
+		return invalid("WithPollInterval: must be positive, got %v", c.pollInterval)
+	case c.healthThreshold < 1:
+		return invalid("WithHealthThreshold: must be at least 1, got %d", c.healthThreshold)
+	case c.logger == nil:
+		return invalid("WithLogger: logger is nil")
+	case c.clock == nil:
+		return invalid("WithClock: clock is nil")
+	case c.staleThreshold < 0:
+		return invalid("WithStaleThreshold: must not be negative, got %v", c.staleThreshold)
+	case c.completionRetention < 0:
+		return invalid("WithCompletionRetention: must not be negative, got %v", c.completionRetention)
+	}
+	return nil
 }
