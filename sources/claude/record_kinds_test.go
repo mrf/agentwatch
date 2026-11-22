@@ -146,7 +146,7 @@ func TestParseSubagentFile_SidechainRecordsStillCounted(t *testing.T) {
 	lines := [][]byte{
 		[]byte(`{"type":"assistant","isSidechain":true,"agentId":"a1","cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:05.000Z","message":{"role":"assistant","model":"sub-model","stop_reason":"tool_use","usage":{"input_tokens":50,"output_tokens":5},"content":[{"type":"tool_use","name":"Read"}]}}`),
 	}
-	r := parseSubagentLines(lines)
+	r := parseSubagentLines(lines, "")
 	if r.model != "sub-model" || r.msgDelta != 1 || r.toolDelta != 1 {
 		t.Errorf("subagent file: model=%q msg=%d tool=%d, want sub-model/1/1", r.model, r.msgDelta, r.toolDelta)
 	}

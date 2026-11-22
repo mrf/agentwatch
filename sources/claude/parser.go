@@ -43,6 +43,7 @@ type jsonlRecord struct {
 
 // claudeMessage is the message field present in "user" and "assistant" records.
 type claudeMessage struct {
+	ID         string         `json:"id,omitempty"`
 	Role       string         `json:"role"`
 	Model      string         `json:"model,omitempty"`
 	Content    []contentBlock `json:"content"`
@@ -111,6 +112,7 @@ type parseResult struct {
 	outputTokens  int
 
 	msgDelta        int
+	lastMsgID       string // message.id of the last counted assistant record
 	toolDelta       int
 	compactionDelta int
 	currentTool     string
@@ -132,7 +134,8 @@ type parseResult struct {
 // same API message ID. Only chunks that contain the "cwd" field have been
 // enriched by the Claude Code wrapper; earlier chunks are raw API events.
 // This function counts enriched assistant records only to avoid over-counting
-// turns.
+// turns, and counts consecutive records sharing a message.id once: Claude Code
+// writes one record per content block of a message.
 //
 // knownParents maps parentToolUseID → toolUseID for subagents tracked in
 // prior batches. Pass nil when no prior state exists.
@@ -141,19 +144,22 @@ func parseLines(lines [][]byte) parseResult {
 }
 
 func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parseResult {
-	return parseRecords(lines, knownParents, false)
+	return parseRecords(lines, knownParents, "", false)
 }
 
 // parseSubagentLines parses a subagent's own transcript, where every record
 // is isSidechain:true and is that subagent's state rather than the parent's.
-func parseSubagentLines(lines [][]byte) parseResult {
-	return parseRecords(lines, nil, true)
+// lastMsgID is the last message.id counted by the previous batch.
+func parseSubagentLines(lines [][]byte, lastMsgID string) parseResult {
+	return parseRecords(lines, nil, lastMsgID, true)
 }
 
 // parseRecords is the shared parser. With includeSidechain false, isSidechain
 // records are skipped entirely so they cannot overwrite parent session state.
-func parseRecords(lines [][]byte, knownParents map[string]string, includeSidechain bool) parseResult {
+// lastMsgID seeds the assistant message.id dedupe from the previous batch.
+func parseRecords(lines [][]byte, knownParents map[string]string, lastMsgID string, includeSidechain bool) parseResult {
 	r := parseResult{
+		lastMsgID: lastMsgID,
 		activity:  session.ActivityIdle,
 		subagents: make(map[string]*subagentResult),
 		parentMap: make(map[string]string),
@@ -262,7 +268,7 @@ func (r *parseResult) applyAssistant(rec *jsonlRecord) {
 		return
 	}
 
-	r.msgDelta++
+	r.countAssistantMessage(rec.Message.ID)
 	r.hasData = true
 	r.applyModelUsage(rec.Message)
 
@@ -279,6 +285,19 @@ func (r *parseResult) applyAssistant(rec *jsonlRecord) {
 		r.activity = session.ActivityWaiting
 	case typeToolUse:
 		r.activity = session.ActivityWorking
+	}
+}
+
+// countAssistantMessage counts a record once per consecutive message.id.
+// Records without an id cannot be deduplicated and always count.
+func (r *parseResult) countAssistantMessage(id string) {
+	if id == "" {
+		r.msgDelta++
+		return
+	}
+	if id != r.lastMsgID {
+		r.msgDelta++
+		r.lastMsgID = id
 	}
 }
 
