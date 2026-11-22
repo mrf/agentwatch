@@ -2,12 +2,20 @@ package claude
 
 import (
 	"encoding/json"
+	"maps"
 	"time"
 
 	"github.com/mrf/agentwatch/session"
 )
 
 const syntheticModel = "<synthetic>"
+
+// JSONL record / content-block type names.
+const (
+	typeUser      = "user"
+	typeAssistant = "assistant"
+	typeToolUse   = "tool_use"
+)
 
 // jsonlRecord is the top-level shape of a Claude Code JSONL record.
 // Fields not relevant to monitoring are omitted.
@@ -152,9 +160,7 @@ func parseRecords(lines [][]byte, knownParents map[string]string, includeSidecha
 	}
 
 	// Seed parent map from prior batches.
-	for pid, sid := range knownParents {
-		r.parentMap[pid] = sid
-	}
+	maps.Copy(r.parentMap, knownParents)
 
 	for i := 0; i < len(lines); i++ {
 		line := lines[i]
@@ -198,22 +204,22 @@ func parseRecords(lines [][]byte, knownParents map[string]string, includeSidecha
 		}
 
 		switch rec.Type {
-		case "user":
+		case typeUser:
 			if rec.IsCompactSummary {
 				continue
 			}
-			if rec.Message != nil && rec.Message.Role == "user" {
+			if rec.Message != nil && rec.Message.Role == typeUser {
 				r.msgDelta++
 				r.activity = session.ActivityWorking
 				r.hasData = true
 				checkSubagentCompletion(rec.Message.Content, &r, r.lastActivityAt)
 			}
 
-		case "assistant":
+		case typeAssistant:
 			// Only count assistant records that carry the Claude Code wrapper
 			// fields (cwd present). Records without cwd are raw API streaming
 			// events that precede the final enriched record for the same turn.
-			if rec.Message == nil || rec.Message.Role != "assistant" || rec.CWD == "" {
+			if rec.Message == nil || rec.Message.Role != typeAssistant || rec.CWD == "" {
 				continue
 			}
 
@@ -237,7 +243,7 @@ func parseRecords(lines [][]byte, knownParents map[string]string, includeSidecha
 
 			// Count tool_use content blocks and record the last tool name.
 			for j := 0; j < len(rec.Message.Content); j++ {
-				if rec.Message.Content[j].Type == "tool_use" {
+				if rec.Message.Content[j].Type == typeToolUse {
 					r.toolDelta++
 					r.currentTool = rec.Message.Content[j].Name
 				}
@@ -246,12 +252,12 @@ func parseRecords(lines [][]byte, knownParents map[string]string, includeSidecha
 			switch rec.Message.StopReason {
 			case "end_turn":
 				r.activity = session.ActivityWaiting
-			case "tool_use":
+			case typeToolUse:
 				r.activity = session.ActivityWorking
 			}
 
 		case "progress":
-			parseProgressRecord(&rec, line, &r)
+			parseProgressRecord(&rec, &r)
 
 		case "system":
 			if rec.Subtype == "compact_boundary" {
@@ -265,7 +271,7 @@ func parseRecords(lines [][]byte, knownParents map[string]string, includeSidecha
 
 // parseProgressRecord handles a type:"progress" JSONL line, accumulating
 // subagent state into r.subagents keyed by toolUseID.
-func parseProgressRecord(rec *jsonlRecord, line []byte, r *parseResult) {
+func parseProgressRecord(rec *jsonlRecord, r *parseResult) {
 	if rec.ToolUseID == "" {
 		return
 	}
@@ -329,7 +335,7 @@ func parseProgressRecord(rec *jsonlRecord, line []byte, r *parseResult) {
 	}
 
 	switch pd.Message.Type {
-	case "assistant":
+	case typeAssistant:
 		sub.msgCount++
 		if pd.Message.Message != nil {
 			parseSubagentAssistantMessage(pd.Message.Message, sub)
@@ -337,7 +343,7 @@ func parseProgressRecord(rec *jsonlRecord, line []byte, r *parseResult) {
 		if sub.activity != session.ActivityWorking {
 			sub.activity = session.ActivityWaiting
 		}
-	case "user":
+	case typeUser:
 		sub.msgCount++
 		sub.activity = session.ActivityWaiting
 	}
@@ -365,7 +371,7 @@ func parseSubagentAssistantMessage(raw json.RawMessage, sub *subagentResult) {
 	}
 
 	for i := 0; i < len(msg.Content); i++ {
-		if msg.Content[i].Type == "tool_use" {
+		if msg.Content[i].Type == typeToolUse {
 			sub.toolCalls++
 			sub.currentTool = msg.Content[i].Name
 			sub.activity = session.ActivityWorking

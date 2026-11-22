@@ -1,5 +1,7 @@
 package claude
 
+import "maps"
+
 // defaultContextWindows maps exact model IDs, as they appear in transcript
 // assistant records, to their context window in tokens. A model absent from
 // the table has an unknown window and reports MaxContextTokens 0, so its
@@ -26,9 +28,7 @@ func WithContextWindows(windows map[string]int) Option {
 		if s.contextWindows == nil {
 			s.contextWindows = make(map[string]int, len(windows))
 		}
-		for model, n := range windows {
-			s.contextWindows[model] = n
-		}
+		maps.Copy(s.contextWindows, windows)
 	}
 }
 

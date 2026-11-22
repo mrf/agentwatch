@@ -10,8 +10,10 @@ import (
 	"cmp"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -339,12 +341,8 @@ func mergeParents(prior, next map[string]string) map[string]string {
 		return prior
 	}
 	merged := make(map[string]string, len(prior)+len(next))
-	for k, v := range prior {
-		merged[k] = v
-	}
-	for k, v := range next {
-		merged[k] = v
-	}
+	maps.Copy(merged, prior)
+	maps.Copy(merged, next)
 	return merged
 }
 
@@ -502,13 +500,13 @@ func (s *ClaudeSource) consumePendingTerminal(sessionID string) (consumedMarker,
 // (timestamp, reason) are sanitised in place rather than causing rejection.
 func validateEndMarker(marker *sessionEndMarker, now time.Time) error {
 	if marker.SessionID == "" {
-		return fmt.Errorf("empty session_id")
+		return errors.New("empty session_id")
 	}
 	if len(marker.SessionID) > maxSessionIDLen {
 		return fmt.Errorf("session_id too long (%d > %d)", len(marker.SessionID), maxSessionIDLen)
 	}
 	if !validSessionIDRe.MatchString(marker.SessionID) {
-		return fmt.Errorf("session_id contains invalid characters")
+		return errors.New("session_id contains invalid characters")
 	}
 
 	if marker.TranscriptPath != "" {
@@ -516,10 +514,10 @@ func validateEndMarker(marker *sessionEndMarker, now time.Time) error {
 			return fmt.Errorf("transcript_path too long (%d > %d)", len(marker.TranscriptPath), maxTranscriptPathLen)
 		}
 		if !strings.HasSuffix(marker.TranscriptPath, ".jsonl") {
-			return fmt.Errorf("transcript_path does not end with .jsonl")
+			return errors.New("transcript_path does not end with .jsonl")
 		}
 		if strings.Contains(marker.TranscriptPath, "..") {
-			return fmt.Errorf("transcript_path contains path traversal")
+			return errors.New("transcript_path contains path traversal")
 		}
 	}
 

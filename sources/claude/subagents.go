@@ -2,6 +2,7 @@ package claude
 
 import (
 	"encoding/json"
+	"maps"
 	"os"
 	"path/filepath"
 	"sort"
@@ -192,9 +193,7 @@ func accumulateSubagent(prev, b session.SubagentState) session.SubagentState {
 // cursor knows about, so a parent tool_result can complete it.
 func (cc *claudeCursor) knownParents() map[string]string {
 	m := make(map[string]string, len(cc.Parents)+len(cc.Subagents))
-	for k, v := range cc.Parents {
-		m[k] = v
-	}
+	maps.Copy(m, cc.Parents)
 	for id, e := range cc.Subagents {
 		if e.State.ParentID != "" {
 			m[e.State.ParentID] = id
