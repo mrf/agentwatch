@@ -130,17 +130,22 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Start write pump in background.
 	go s.writePump(c)
 
+	// Cancelled when the read pump exits so the heartbeat stops with it.
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+
 	// Start heartbeat in background.
 	var heartbeatDone chan struct{}
 	if s.cfg.heartbeat > 0 {
 		heartbeatDone = make(chan struct{})
-		go s.heartbeatLoop(c, heartbeatDone)
+		go s.heartbeatLoop(ctx, c, heartbeatDone)
 	}
 
 	// Read pump — blocks until the client disconnects or sends a message.
-	s.readPump(r.Context(), c)
+	s.readPump(ctx, c)
 
 	// Cleanup.
+	cancel()
 	s.bcast.removeConn(c)
 	if heartbeatDone != nil {
 		<-heartbeatDone
@@ -186,6 +191,8 @@ func (s *Server) writePump(c *conn) {
 		cancel()
 		if err != nil {
 			s.bcast.removeConn(c)
+			// A failed write leaves the socket open; close it so readPump returns.
+			_ = c.ws.CloseNow()
 			return
 		}
 	}
@@ -206,13 +213,16 @@ func (s *Server) readPump(ctx context.Context, c *conn) {
 }
 
 // heartbeatLoop sends periodic pings to detect dead connections.
-func (s *Server) heartbeatLoop(c *conn, done chan struct{}) {
+func (s *Server) heartbeatLoop(ctx context.Context, c *conn, done chan struct{}) {
 	defer close(done)
 	ticker := time.NewTicker(s.cfg.heartbeat)
 	defer ticker.Stop()
-	ctx := context.Background()
 	for {
-		<-ticker.C
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
 		c.mu.Lock()
 		closed := c.closed
 		c.mu.Unlock()
