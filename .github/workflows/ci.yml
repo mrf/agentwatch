@@ -38,7 +38,7 @@ jobs:
 
       - name: gofmt
         run: |
-          unformatted="$(gofmt -l .)"
+          unformatted="$(gofmt -l $(git ls-files '*.go'))"
           if [ -n "$unformatted" ]; then
             echo "gofmt needed on:"
             echo "$unformatted"
