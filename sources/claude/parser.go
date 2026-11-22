@@ -7,6 +7,8 @@ import (
 	"github.com/mrf/agentwatch/session"
 )
 
+const syntheticModel = "<synthetic>"
+
 // jsonlRecord is the top-level shape of a Claude Code JSONL record.
 // Fields not relevant to monitoring are omitted.
 type jsonlRecord struct {
@@ -14,9 +16,16 @@ type jsonlRecord struct {
 	SessionID string         `json:"sessionId"`
 	Timestamp string         `json:"timestamp"`
 	CWD       string         `json:"cwd"`
+	Subtype   string         `json:"subtype"`
 	GitBranch string         `json:"gitBranch"`
 	Slug      string         `json:"slug"`
 	Message   *claudeMessage `json:"message,omitempty"`
+
+	// IsSidechain marks records of a subagent's own conversation.
+	IsSidechain bool `json:"isSidechain,omitempty"`
+	// IsCompactSummary marks the synthetic user record that follows a
+	// compact_boundary and carries the conversation summary.
+	IsCompactSummary bool `json:"isCompactSummary,omitempty"`
 
 	// Fields present on type:"progress" records.
 	ToolUseID       string          `json:"toolUseID,omitempty"`
@@ -124,6 +133,18 @@ func parseLines(lines [][]byte) parseResult {
 }
 
 func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parseResult {
+	return parseRecords(lines, knownParents, false)
+}
+
+// parseSubagentLines parses a subagent's own transcript, where every record
+// is isSidechain:true and is that subagent's state rather than the parent's.
+func parseSubagentLines(lines [][]byte) parseResult {
+	return parseRecords(lines, nil, true)
+}
+
+// parseRecords is the shared parser. With includeSidechain false, isSidechain
+// records are skipped entirely so they cannot overwrite parent session state.
+func parseRecords(lines [][]byte, knownParents map[string]string, includeSidechain bool) parseResult {
 	r := parseResult{
 		activity:  session.ActivityIdle,
 		subagents: make(map[string]*subagentResult),
@@ -144,6 +165,9 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 		var rec jsonlRecord
 		if err := json.Unmarshal(line, &rec); err != nil {
 			continue // skip malformed lines
+		}
+		if rec.IsSidechain && !includeSidechain {
+			continue
 		}
 
 		// Capture the earliest timestamp as startedAt, latest as lastActivityAt.
@@ -175,6 +199,9 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 
 		switch rec.Type {
 		case "user":
+			if rec.IsCompactSummary {
+				continue
+			}
 			if rec.Message != nil && rec.Message.Role == "user" {
 				r.msgDelta++
 				r.activity = session.ActivityWorking
@@ -193,11 +220,15 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 			r.msgDelta++
 			r.hasData = true
 
-			if rec.Message.Model != "" {
+			// Locally generated turns (API errors, interrupts) carry the
+			// placeholder model "<synthetic>" and zeroed usage; neither
+			// describes the real conversation.
+			synthetic := rec.Message.Model == syntheticModel
+			if rec.Message.Model != "" && !synthetic {
 				r.model = rec.Message.Model
 			}
 
-			if rec.Message.Usage != nil {
+			if rec.Message.Usage != nil && !synthetic {
 				u := rec.Message.Usage
 				r.hasTokens = true
 				r.contextTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
@@ -222,8 +253,10 @@ func parseLinesWithParents(lines [][]byte, knownParents map[string]string) parse
 		case "progress":
 			parseProgressRecord(&rec, line, &r)
 
-		case "compaction":
-			r.compactionDelta++
+		case "system":
+			if rec.Subtype == "compact_boundary" {
+				r.compactionDelta++
+			}
 		}
 	}
 

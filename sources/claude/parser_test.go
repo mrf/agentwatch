@@ -402,7 +402,7 @@ func TestParseLines_ProgressSelfFilteredBySlug(t *testing.T) {
 func TestParseLines_CompactionEvent(t *testing.T) {
 	// A compaction record should increment compactionDelta and not affect other counts.
 	lines := [][]byte{
-		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z","summary":"compacted context"}`),
+		[]byte(`{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z","summary":"compacted context"}`),
 	}
 	r := parseLines(lines)
 	if r.compactionDelta != 1 {
@@ -416,9 +416,9 @@ func TestParseLines_CompactionEvent(t *testing.T) {
 func TestParseLines_MultipleCompactionEvents(t *testing.T) {
 	// Multiple compaction records in one batch should accumulate.
 	lines := [][]byte{
-		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}`),
-		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:01:00.000Z"}`),
-		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:02:00.000Z"}`),
+		[]byte(`{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}`),
+		[]byte(`{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:01:00.000Z"}`),
+		[]byte(`{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:02:00.000Z"}`),
 	}
 	r := parseLines(lines)
 	if r.compactionDelta != 3 {
@@ -431,7 +431,7 @@ func TestParseLines_CompactionWithOtherRecords(t *testing.T) {
 	// should increment compactionDelta, not affect message count logic.
 	lines := [][]byte{
 		[]byte(`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]},"cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z","gitBranch":"main"}`),
-		[]byte(`{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:01.000Z"}`),
+		[]byte(`{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:00:01.000Z"}`),
 		[]byte(`{"type":"assistant","message":{"role":"assistant","model":"claude-sonnet-4-6","content":[],"stop_reason":"end_turn","usage":{"input_tokens":5,"cache_read_input_tokens":0,"cache_creation_input_tokens":0,"output_tokens":3}},"cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:02.000Z","gitBranch":"main","slug":"test"}`),
 	}
 	r := parseLines(lines)
@@ -447,7 +447,7 @@ func TestParse_CompactionCountDeltaInSourceUpdate(t *testing.T) {
 	// Parse should propagate compactionDelta to SourceUpdate.CompactionCountDelta.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
-	content := `{"type":"compaction","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}` + "\n" +
+	content := `{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}` + "\n" +
 		`{"type":"user","message":{"role":"user","content":[{"type":"text","text":"hi"}]},"cwd":"/p","sessionId":"s1","timestamp":"2026-01-01T10:00:01.000Z","gitBranch":"main"}` + "\n"
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
