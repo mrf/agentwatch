@@ -69,6 +69,38 @@ func NewServer(mon *monitor.Monitor, opts ...Option) (*Server, error) {
 	return s, nil
 }
 
+// reject runs the pre-upgrade checks in order and returns the error message
+// and status of the first that fails, or a zero status to accept.
+func (s *Server) reject(r *http.Request) (string, int) {
+	s.mu.Lock()
+	stopped := s.stopped
+	s.mu.Unlock()
+	if stopped {
+		return "server stopped", http.StatusServiceUnavailable
+	}
+
+	// Host check (DNS rebinding). Before rate limiting so rebound requests,
+	// which arrive from loopback, cannot drain the loopback token bucket.
+	if !hostcheck.HostAllowed(r.Host, s.cfg.allowedHosts) {
+		return "host not allowed", http.StatusForbidden
+	}
+
+	if s.rateLimiter != nil && !s.rateLimiter.Allow(clientAddress(r, s.trusted)).Allowed {
+		return "rate limit exceeded", http.StatusTooManyRequests
+	}
+
+	if !hostcheck.OriginAllowed(r.Header.Get("Origin"), r.Host, s.cfg.allowedOrigins, s.cfg.localhostOriginsAnyPort) {
+		return "origin not allowed", http.StatusForbidden
+	}
+
+	if s.cfg.authenticator != nil {
+		if _, ok := s.cfg.authenticator.Authenticate(r); !ok {
+			return "unauthorized", http.StatusUnauthorized
+		}
+	}
+	return "", 0
+}
+
 // HandleEvent implements monitor.EventSink. It fans out the event to all
 // connected WebSocket clients. Returns quickly via non-blocking sends.
 func (s *Server) HandleEvent(ctx context.Context, ev monitor.Event) error {
@@ -78,42 +110,9 @@ func (s *Server) HandleEvent(ctx context.Context, ev monitor.Event) error {
 // ServeHTTP handles WebSocket upgrade requests. Attach this to your HTTP
 // router at the desired path (e.g., "/ws").
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	s.mu.Lock()
-	stopped := s.stopped
-	s.mu.Unlock()
-	if stopped {
-		http.Error(w, "server stopped", http.StatusServiceUnavailable)
+	if msg, code := s.reject(r); code != 0 {
+		http.Error(w, msg, code)
 		return
-	}
-
-	// Host check (DNS rebinding). Before rate limiting so rebound requests,
-	// which arrive from loopback, cannot drain the loopback token bucket.
-	if !hostcheck.HostAllowed(r.Host, s.cfg.allowedHosts) {
-		http.Error(w, "host not allowed", http.StatusForbidden)
-		return
-	}
-
-	// Rate limit check.
-	if s.rateLimiter != nil {
-		decision := s.rateLimiter.Allow(clientAddress(r, s.trusted))
-		if !decision.Allowed {
-			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
-			return
-		}
-	}
-
-	// Origin check.
-	if !hostcheck.OriginAllowed(r.Header.Get("Origin"), r.Host, s.cfg.allowedOrigins, s.cfg.localhostOriginsAnyPort) {
-		http.Error(w, "origin not allowed", http.StatusForbidden)
-		return
-	}
-
-	// Authentication check.
-	if s.cfg.authenticator != nil {
-		if _, ok := s.cfg.authenticator.Authenticate(r); !ok {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
 	}
 
 	// Accept the WebSocket upgrade.

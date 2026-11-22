@@ -185,21 +185,29 @@ func clientAddress(r *http.Request, trusted []netip.Prefix) string {
 	}
 
 	if forwarded := r.Header.Values("X-Forwarded-For"); len(forwarded) > 0 {
-		hops := strings.Split(strings.Join(forwarded, ","), ",")
-		for i := len(hops) - 1; i >= 0; i-- {
-			hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
-			if err != nil {
-				return host
-			}
-			if !isTrusted(hop, trusted) || i == 0 {
-				return hop.Unmap().String()
-			}
-		}
+		return forwardedClient(forwarded, host, trusted)
 	}
 
 	if realIP, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
 		return realIP.Unmap().String()
 	}
 
+	return host
+}
+
+// forwardedClient walks the X-Forwarded-For hops right to left and returns
+// the first untrusted one (or the leftmost). A malformed hop falls back to
+// host, the trusted proxy that sent the header.
+func forwardedClient(forwarded []string, host string, trusted []netip.Prefix) string {
+	hops := strings.Split(strings.Join(forwarded, ","), ",")
+	for i := len(hops) - 1; i >= 0; i-- {
+		hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+		if err != nil {
+			return host
+		}
+		if !isTrusted(hop, trusted) || i == 0 {
+			return hop.Unmap().String()
+		}
+	}
 	return host
 }
