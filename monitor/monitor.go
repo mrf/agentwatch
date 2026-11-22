@@ -88,271 +88,318 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		return ctx.Err()
 	}
 
-	var (
-		updates      []session.SessionState
-		lifecycles   []session.LifecycleEvent
-		healthEvents []Health
-		completions  []subagentCompletion
-		discovered   = make(map[string]struct{}) // sources whose Discover succeeded
-	)
+	b := pollBatch{discovered: make(map[string]struct{})}
 
 	for i := 0; i < len(m.cfg.sources); i++ {
+		if err := m.pollSource(ctx, m.cfg.sources[i], &b); err != nil {
+			return err
+		}
+	}
+
+	m.sweepStale(&b)
+	m.sweepCompletions(&b)
+	m.sweepRetention(&b)
+	m.deliver(ctx, &b)
+	return nil
+}
+
+// pollBatch accumulates one PollOnce's committed changes for delivery after
+// every store lock is released.
+type pollBatch struct {
+	updates      []session.SessionState
+	lifecycles   []session.LifecycleEvent
+	healthEvents []Health
+	completions  []subagentCompletion
+	removedIDs   []string
+	discovered   map[string]struct{} // sources whose Discover succeeded
+}
+
+// pollSource discovers and parses every session of src, then records the
+// source's health. It returns ctx.Err() if the context is canceled.
+func (m *Monitor) pollSource(ctx context.Context, src source.Source, b *pollBatch) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	srcName := src.Name()
+	handles, err := src.Discover(ctx)
+	if err != nil {
+		m.cfg.logger.Warn("discover failed",
+			"source", srcName,
+			"error", err,
+		)
+
+		if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
+			sh.recordDiscoverFailure(discoverErrorCategory(err), threshold)
+		}); changed {
+			b.healthEvents = append(b.healthEvents, h)
+		}
+		return nil
+	}
+	b.discovered[srcName] = struct{}{}
+
+	parseFailed := make(map[string]struct{})
+	skipped := 0
+	for j := 0; j < len(handles); j++ {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
 
-		src := m.cfg.sources[i]
-		srcName := src.Name()
-		parseFailed := make(map[string]struct{})
-		skipped := 0
-
-		handles, err := src.Discover(ctx)
-		if err != nil {
-			m.cfg.logger.Warn("discover failed",
-				"source", srcName,
-				"error", err,
-			)
-
-			if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
-				sh.recordDiscoverFailure(discoverErrorCategory(err), threshold)
-			}); changed {
-				healthEvents = append(healthEvents, h)
-			}
+		h := handles[j]
+		update, ok := m.parseHandle(ctx, src, h)
+		if !ok {
+			parseFailed[h.ID] = struct{}{}
 			continue
 		}
-		discovered[srcName] = struct{}{}
 
-		for j := 0; j < len(handles); j++ {
-			if err := ctx.Err(); err != nil {
-				return err
-			}
+		// Counted before the no-data shortcut: a batch of only oversized
+		// lines has no SessionID but still happened.
+		skipped += update.SkippedLines
 
-			h := handles[j]
-			cKey := cursorKey(srcName, h.ID)
-
-			m.mu.Lock()
-			cursor := m.cursors[cKey].cursor
-			m.mu.Unlock()
-
-			update, newCursor, parseErr := src.Parse(ctx, h, cursor)
-
-			// A removed session's state is gone but its cursor is kept, so
-			// the batch that revives it holds only incremental deltas. Re-read
-			// from a zero cursor to rebuild whole-history counts and
-			// StartedAt. On a failed re-read keep the pre-resume cursor so
-			// the next poll retries the same path.
-			if parseErr == nil && update.SessionID != "" && m.isRemoved(h.ID) {
-				update, newCursor, parseErr = src.Parse(ctx, h, "")
-				if parseErr != nil {
-					newCursor = cursor
-				}
-			}
-
-			// Persist the returned cursor unconditionally: the source
-			// contract says a source that wants a retry returns the cursor
-			// it was given, so empty batches and errors must not drop an
-			// advance (design rule 5: never inspect or compare a Cursor).
-			m.mu.Lock()
-			m.cursors[cKey] = cursorEntry{
-				cursor:   newCursor,
-				source:   srcName,
-				id:       h.ID,
-				lastSeen: m.cfg.clock.Now(),
-			}
-			m.mu.Unlock()
-
-			if parseErr != nil {
-				m.cfg.logger.Warn("parse failed",
-					"source", srcName,
-					"session", h.ID,
-					"error", parseErr,
-				)
-				parseFailed[h.ID] = struct{}{}
-				continue
-			}
-
-			// Counted before the no-data shortcut: a batch of only oversized
-			// lines has no SessionID but still happened.
-			skipped += update.SkippedLines
-
-			// No new data — zero SourceUpdate per the source contract.
-			if update.SessionID == "" {
-				continue
-			}
-
-			now := m.cfg.clock.Now()
-
-			// Lock, commit state change, collect event info, then unlock.
-			// Events are delivered after unlock (§12.8).
-			m.mu.Lock()
-
-			existing, existed := m.store[h.ID]
-
-			// A terminal marker for a session that is already terminal (e.g.
-			// consumed after the stale sweep) is not new activity: no
-			// transition in ADR 0005 covers it, so it must not resume.
-			if existed && existing.Lifecycle == session.LifecycleTerminal && update.Terminal {
-				m.mu.Unlock()
-				continue
-			}
-
-			var state session.SessionState
-			lcEvent := session.LifecycleEvent{
-				SessionID: h.ID,
-				Source:    h.Source,
-				At:        now,
-			}
-
-			_, wasRemoved := m.removed[h.ID]
-			_, fromContent := m.contentStart[h.ID]
-
-			switch {
-			case !existed:
-				base := session.SessionState{
-					ID:        h.ID,
-					Source:    h.Source,
-					Lifecycle: session.LifecycleActive,
-					StartedAt: h.StartedAt,
-				}
-				state = applyUpdate(base, update, now, false)
-				lcEvent.To = session.LifecycleActive
-
-				if wasRemoved {
-					delete(m.removed, h.ID)
-					lcEvent.Type = session.EventResumed
-					lcEvent.From = session.LifecycleTerminal
-				} else {
-					lcEvent.Type = session.EventDiscovered
-				}
-
-			case existing.Lifecycle == session.LifecycleTerminal:
-				state = applyUpdate(existing, update, now, fromContent)
-				state.Lifecycle = session.LifecycleActive
-				state.CompletedAt = nil
-				lcEvent.Type = session.EventResumed
-				lcEvent.From = session.LifecycleTerminal
-				lcEvent.To = session.LifecycleActive
-
-			case update.Terminal:
-				state = applyUpdate(existing, update, now, fromContent)
-				state.Lifecycle = session.LifecycleTerminal
-				endedAt := update.EndedAt
-				if endedAt.IsZero() {
-					endedAt = now
-				}
-				state.CompletedAt = &endedAt
-				lcEvent.Type = session.EventTerminal
-				lcEvent.From = session.LifecycleActive
-				lcEvent.To = session.LifecycleTerminal
-				lcEvent.Reason = update.EndReason
-
-			default:
-				state = applyUpdate(existing, update, now, fromContent)
-				lcEvent.Type = session.EventUpdated
-				lcEvent.From = session.LifecycleActive
-				lcEvent.To = session.LifecycleActive
-			}
-
-			m.store[h.ID] = state
-			if existed {
-				completions = appendCompletions(completions, h, existing.Subagents, state.Subagents)
-			}
-			if !update.StartedAt.IsZero() {
-				m.contentStart[h.ID] = struct{}{}
-			}
-			cloned := state.Clone()
-
-			m.mu.Unlock()
-			// State is committed and lock is released before event collection.
-
-			updates = append(updates, cloned)
-			lifecycles = append(lifecycles, lcEvent)
+		// No new data — zero SourceUpdate per the source contract.
+		if update.SessionID == "" {
+			continue
 		}
+		m.commitUpdate(h, update, b)
+	}
 
-		// Update health for this source after processing all handles.
-		handleIDs := make([]string, 0, len(handles))
-		for j := 0; j < len(handles); j++ {
-			handleIDs = append(handleIDs, handles[j].ID)
-		}
-		if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
-			sh.recordDiscoverSuccess(threshold)
-			sh.recordParses(handleIDs, parseFailed, threshold)
-			sh.skippedLines += skipped
-		}); changed {
-			healthEvents = append(healthEvents, h)
+	handleIDs := make([]string, 0, len(handles))
+	for j := 0; j < len(handles); j++ {
+		handleIDs = append(handleIDs, handles[j].ID)
+	}
+	if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
+		sh.recordDiscoverSuccess(threshold)
+		sh.recordParses(handleIDs, parseFailed, threshold)
+		sh.skippedLines += skipped
+	}); changed {
+		b.healthEvents = append(b.healthEvents, h)
+	}
+	return nil
+}
+
+// parseHandle parses h from its stored cursor and persists the returned
+// cursor. It reports false, after logging, when the parse failed.
+func (m *Monitor) parseHandle(ctx context.Context, src source.Source, h source.SessionHandle) (source.SourceUpdate, bool) {
+	srcName := src.Name()
+	cKey := cursorKey(srcName, h.ID)
+
+	m.mu.Lock()
+	cursor := m.cursors[cKey].cursor
+	m.mu.Unlock()
+
+	update, newCursor, parseErr := src.Parse(ctx, h, cursor)
+
+	// A removed session's state is gone but its cursor is kept, so
+	// the batch that revives it holds only incremental deltas. Re-read
+	// from a zero cursor to rebuild whole-history counts and
+	// StartedAt. On a failed re-read keep the pre-resume cursor so
+	// the next poll retries the same path.
+	if parseErr == nil && update.SessionID != "" && m.isRemoved(h.ID) {
+		update, newCursor, parseErr = src.Parse(ctx, h, "")
+		if parseErr != nil {
+			newCursor = cursor
 		}
 	}
 
-	// Sweep: detect stale active sessions.
-	if m.cfg.staleThreshold > 0 {
-		now := m.cfg.clock.Now()
-		threshold := now.Add(-m.cfg.staleThreshold)
+	// Persist the returned cursor unconditionally: the source
+	// contract says a source that wants a retry returns the cursor
+	// it was given, so empty batches and errors must not drop an
+	// advance (design rule 5: never inspect or compare a Cursor).
+	m.mu.Lock()
+	m.cursors[cKey] = cursorEntry{
+		cursor:   newCursor,
+		source:   srcName,
+		id:       h.ID,
+		lastSeen: m.cfg.clock.Now(),
+	}
+	m.mu.Unlock()
 
-		m.mu.Lock()
-		for id, s := range m.store {
-			if s.Lifecycle != session.LifecycleActive {
-				continue
-			}
-			if !s.LastDataReceivedAt.IsZero() && s.LastDataReceivedAt.Before(threshold) {
-				s.Lifecycle = session.LifecycleTerminal
-				completedAt := now
-				s.CompletedAt = &completedAt
-				m.store[id] = s
+	if parseErr != nil {
+		m.cfg.logger.Warn("parse failed",
+			"source", srcName,
+			"session", h.ID,
+			"error", parseErr,
+		)
+		return source.SourceUpdate{}, false
+	}
+	return update, true
+}
 
-				cloned := s.Clone()
-				updates = append(updates, cloned)
-				lifecycles = append(lifecycles, session.LifecycleEvent{
-					Type:      session.EventStale,
-					SessionID: id,
-					Source:    s.Source,
-					From:      session.LifecycleActive,
-					To:        session.LifecycleTerminal,
-					At:        now,
-					Reason:    "no data received past stale threshold",
-				})
-			}
-		}
+// commitUpdate applies a non-empty update to the store under m.mu and queues
+// the resulting state and lifecycle event on b. Events are delivered after
+// unlock (§12.8).
+func (m *Monitor) commitUpdate(h source.SessionHandle, update source.SourceUpdate, b *pollBatch) {
+	now := m.cfg.clock.Now()
+
+	m.mu.Lock()
+
+	existing, existed := m.store[h.ID]
+
+	// A terminal marker for a session that is already terminal (e.g.
+	// consumed after the stale sweep) is not new activity: no
+	// transition in ADR 0005 covers it, so it must not resume.
+	if existed && existing.Lifecycle == session.LifecycleTerminal && update.Terminal {
 		m.mu.Unlock()
+		return
 	}
 
-	// Sweep: mark active sessions as terminal when a parent session reports
-	// the corresponding subagent as completed. Match by slug, within the
-	// parent's source, and only in the poll where the subagent transitioned
-	// to completed, so a session that resumes later is not swept again.
-	if len(completions) > 0 {
-		now := m.cfg.clock.Now()
-		m.mu.Lock()
-
-		for id, s := range m.store {
-			if s.Lifecycle != session.LifecycleActive || s.Slug == "" {
-				continue
-			}
-			if !matchesCompletion(completions, id, s) {
-				continue
-			}
-			s.Lifecycle = session.LifecycleTerminal
-			completedAt := now
-			s.CompletedAt = &completedAt
-			m.store[id] = s
-
-			cloned := s.Clone()
-			updates = append(updates, cloned)
-			lifecycles = append(lifecycles, session.LifecycleEvent{
-				Type:      session.EventTerminal,
-				SessionID: id,
-				Source:    s.Source,
-				From:      session.LifecycleActive,
-				To:        session.LifecycleTerminal,
-				At:        now,
-				Reason:    "parent reported subagent completion",
-			})
+	var state session.SessionState
+	var lcEvent session.LifecycleEvent
+	if existed {
+		_, fromContent := m.contentStart[h.ID]
+		state, lcEvent = transitionExisting(h, existing, update, now, fromContent)
+	} else {
+		_, wasRemoved := m.removed[h.ID]
+		if wasRemoved {
+			delete(m.removed, h.ID)
 		}
-
-		m.mu.Unlock()
+		state, lcEvent = transitionNew(h, update, now, wasRemoved)
 	}
 
-	// Sweep: remove terminal sessions past retention window.
-	var removedIDs []string
+	m.store[h.ID] = state
+	if existed {
+		b.completions = appendCompletions(b.completions, h, existing.Subagents, state.Subagents)
+	}
+	if !update.StartedAt.IsZero() {
+		m.contentStart[h.ID] = struct{}{}
+	}
+	cloned := state.Clone()
+
+	m.mu.Unlock()
+	// State is committed and lock is released before event collection.
+
+	b.updates = append(b.updates, cloned)
+	b.lifecycles = append(b.lifecycles, lcEvent)
+}
+
+// transitionNew builds the state and lifecycle event for a session absent
+// from the store: Discovered, or Resumed when a retention sweep removed it.
+func transitionNew(h source.SessionHandle, update source.SourceUpdate, now time.Time, wasRemoved bool) (session.SessionState, session.LifecycleEvent) {
+	base := session.SessionState{
+		ID:        h.ID,
+		Source:    h.Source,
+		Lifecycle: session.LifecycleActive,
+		StartedAt: h.StartedAt,
+	}
+	state := applyUpdate(base, update, now, false)
+	lcEvent := session.LifecycleEvent{
+		Type:      session.EventDiscovered,
+		SessionID: h.ID,
+		Source:    h.Source,
+		To:        session.LifecycleActive,
+		At:        now,
+	}
+	if wasRemoved {
+		lcEvent.Type = session.EventResumed
+		lcEvent.From = session.LifecycleTerminal
+	}
+	return state, lcEvent
+}
+
+// transitionExisting applies update to a stored session and returns the new
+// state with its Resumed, Terminal or Updated lifecycle event.
+func transitionExisting(h source.SessionHandle, existing session.SessionState, update source.SourceUpdate, now time.Time, fromContent bool) (session.SessionState, session.LifecycleEvent) {
+	state := applyUpdate(existing, update, now, fromContent)
+	lcEvent := session.LifecycleEvent{
+		SessionID: h.ID,
+		Source:    h.Source,
+		At:        now,
+	}
+
+	switch {
+	case existing.Lifecycle == session.LifecycleTerminal:
+		state.Lifecycle = session.LifecycleActive
+		state.CompletedAt = nil
+		lcEvent.Type = session.EventResumed
+		lcEvent.From = session.LifecycleTerminal
+		lcEvent.To = session.LifecycleActive
+
+	case update.Terminal:
+		state.Lifecycle = session.LifecycleTerminal
+		endedAt := update.EndedAt
+		if endedAt.IsZero() {
+			endedAt = now
+		}
+		state.CompletedAt = &endedAt
+		lcEvent.Type = session.EventTerminal
+		lcEvent.From = session.LifecycleActive
+		lcEvent.To = session.LifecycleTerminal
+		lcEvent.Reason = update.EndReason
+
+	default:
+		lcEvent.Type = session.EventUpdated
+		lcEvent.From = session.LifecycleActive
+		lcEvent.To = session.LifecycleActive
+	}
+	return state, lcEvent
+}
+
+// markTerminal moves the stored session id to terminal at now and queues it
+// on b with a lifecycle event of type typ. Must be called with m.mu held.
+func (m *Monitor) markTerminal(b *pollBatch, id string, s session.SessionState, now time.Time, typ session.LifecycleEventType, reason string) {
+	s.Lifecycle = session.LifecycleTerminal
+	completedAt := now
+	s.CompletedAt = &completedAt
+	m.store[id] = s
+
+	b.updates = append(b.updates, s.Clone())
+	b.lifecycles = append(b.lifecycles, session.LifecycleEvent{
+		Type:      typ,
+		SessionID: id,
+		Source:    s.Source,
+		From:      session.LifecycleActive,
+		To:        session.LifecycleTerminal,
+		At:        now,
+		Reason:    reason,
+	})
+}
+
+// sweepStale marks active sessions terminal once no data has arrived for the
+// stale threshold.
+func (m *Monitor) sweepStale(b *pollBatch) {
+	if m.cfg.staleThreshold <= 0 {
+		return
+	}
+	now := m.cfg.clock.Now()
+	threshold := now.Add(-m.cfg.staleThreshold)
+
+	m.mu.Lock()
+	for id, s := range m.store {
+		if s.Lifecycle != session.LifecycleActive {
+			continue
+		}
+		if !s.LastDataReceivedAt.IsZero() && s.LastDataReceivedAt.Before(threshold) {
+			m.markTerminal(b, id, s, now, session.EventStale, "no data received past stale threshold")
+		}
+	}
+	m.mu.Unlock()
+}
+
+// sweepCompletions marks active sessions terminal when a parent session
+// reports the corresponding subagent as completed. Match by slug, within the
+// parent's source, and only in the poll where the subagent transitioned to
+// completed, so a session that resumes later is not swept again.
+func (m *Monitor) sweepCompletions(b *pollBatch) {
+	if len(b.completions) == 0 {
+		return
+	}
+	now := m.cfg.clock.Now()
+	m.mu.Lock()
+	for id, s := range m.store {
+		if s.Lifecycle != session.LifecycleActive || s.Slug == "" {
+			continue
+		}
+		if !matchesCompletion(b.completions, id, s) {
+			continue
+		}
+		m.markTerminal(b, id, s, now, session.EventTerminal, "parent reported subagent completion")
+	}
+	m.mu.Unlock()
+}
+
+// sweepRetention removes terminal sessions past the retention window and
+// forgets cursors of sessions no source still reports.
+func (m *Monitor) sweepRetention(b *pollBatch) {
 	now := m.cfg.clock.Now()
 
 	m.mu.Lock()
@@ -366,9 +413,9 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		delete(m.store, id)
 		delete(m.contentStart, id)
 		m.removed[id] = struct{}{}
-		removedIDs = append(removedIDs, id)
+		b.removedIDs = append(b.removedIDs, id)
 
-		lifecycles = append(lifecycles, session.LifecycleEvent{
+		b.lifecycles = append(b.lifecycles, session.LifecycleEvent{
 			Type:      session.EventRemoved,
 			SessionID: id,
 			Source:    s.Source,
@@ -377,35 +424,37 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			Reason:    "retention expired",
 		})
 	}
-	m.forgetUndiscovered(now, discovered)
+	m.forgetUndiscovered(now, b.discovered)
 	m.mu.Unlock()
+}
 
-	// Deliver events to sinks outside any lock.
-	if m.cfg.sink != nil {
-		m.emitLifecycleEvents(ctx, lifecycles)
+// deliver emits b's lifecycle, delta and health events to the sink. Must be
+// called outside any lock.
+func (m *Monitor) deliver(ctx context.Context, b *pollBatch) {
+	if m.cfg.sink == nil {
+		return
+	}
+	m.emitLifecycleEvents(ctx, b.lifecycles)
 
-		if len(updates) > 0 || len(removedIDs) > 0 {
-			m.emitEvent(ctx, Event{
-				Seq:     m.seq.Add(1),
-				At:      m.cfg.clock.Now(),
-				Type:    EventDelta,
-				Updates: dedupeUpdates(updates),
-				Removed: removedIDs,
-			})
-		}
-
-		for i := 0; i < len(healthEvents); i++ {
-			h := healthEvents[i]
-			m.emitEvent(ctx, Event{
-				Seq:    m.seq.Add(1),
-				At:     h.UpdatedAt,
-				Type:   EventHealth,
-				Health: &h,
-			})
-		}
+	if len(b.updates) > 0 || len(b.removedIDs) > 0 {
+		m.emitEvent(ctx, Event{
+			Seq:     m.seq.Add(1),
+			At:      m.cfg.clock.Now(),
+			Type:    EventDelta,
+			Updates: dedupeUpdates(b.updates),
+			Removed: b.removedIDs,
+		})
 	}
 
-	return nil
+	for i := 0; i < len(b.healthEvents); i++ {
+		h := b.healthEvents[i]
+		m.emitEvent(ctx, Event{
+			Seq:    m.seq.Add(1),
+			At:     h.UpdatedAt,
+			Type:   EventHealth,
+			Health: &h,
+		})
+	}
 }
 
 // Run starts the monitor loop. It polls sources at the configured interval
@@ -555,16 +604,27 @@ func (m *Monitor) Health() map[string]Health {
 // startFromContent reports whether state.StartedAt already came from source
 // content rather than the Discover-time handle.
 func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Time, startFromContent bool) session.SessionState {
-	if u.Slug != "" {
-		state.Slug = u.Slug
-	}
-	if u.Activity != "" {
-		state.Activity = u.Activity
-	}
-	if u.Model != "" {
-		state.Model = u.Model
+	overlay(&state.Slug, u.Slug)
+	overlay(&state.Activity, u.Activity)
+	overlay(&state.Model, u.Model)
+	applyTokens(&state, u)
+	applyCounts(&state, u)
+	overlay(&state.CurrentTool, u.CurrentTool)
+	overlay(&state.WorkingDir, u.WorkingDir)
+	overlay(&state.Branch, u.Branch)
+	state.StartedAt = mergeStartedAt(state.StartedAt, startFromContent, u.StartedAt)
+	overlayTime(&state.LastActivityAt, u.LastActivityAt)
+	state.LastDataReceivedAt = now
+
+	if !u.Reset && len(u.Subagents) > 0 {
+		state.Subagents = mergeSubagents(state.Subagents, u.Subagents)
 	}
 
+	return state
+}
+
+// applyTokens copies u's token counts into state and recomputes utilization.
+func applyTokens(state *session.SessionState, u source.SourceUpdate) {
 	// Non-zero counts apply without HasTokens so sources written before the
 	// flag existed keep working.
 	if u.HasTokens || u.ContextTokens != 0 || u.OutputTokens != 0 || u.TokenEstimated {
@@ -578,38 +638,36 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 	state.ContextUtilization = session.ComputeContextUtilization(
 		state.ContextTokens, state.MaxContextTokens,
 	)
+}
 
+// applyCounts accumulates u's count deltas into state, or replaces the counts
+// and subagents when u.Reset is set.
+func applyCounts(state *session.SessionState, u source.SourceUpdate) {
 	if u.Reset {
 		state.MessageCount = u.MessageCountDelta
 		state.ToolCallCount = u.ToolCallCountDelta
 		state.CompactionCount = u.CompactionCountDelta
 		state.Subagents = mergeSubagents(nil, u.Subagents)
-	} else {
-		state.MessageCount += u.MessageCountDelta
-		state.ToolCallCount += u.ToolCallCountDelta
-		state.CompactionCount += u.CompactionCountDelta
+		return
 	}
+	state.MessageCount += u.MessageCountDelta
+	state.ToolCallCount += u.ToolCallCountDelta
+	state.CompactionCount += u.CompactionCountDelta
+}
 
-	if u.CurrentTool != "" {
-		state.CurrentTool = u.CurrentTool
+// overlay sets *dst to v unless v is the zero value.
+func overlay[T comparable](dst *T, v T) {
+	var zero T
+	if v != zero {
+		*dst = v
 	}
-	if u.WorkingDir != "" {
-		state.WorkingDir = u.WorkingDir
-	}
-	if u.Branch != "" {
-		state.Branch = u.Branch
-	}
-	state.StartedAt = mergeStartedAt(state.StartedAt, startFromContent, u.StartedAt)
-	if !u.LastActivityAt.IsZero() {
-		state.LastActivityAt = u.LastActivityAt
-	}
-	state.LastDataReceivedAt = now
+}
 
-	if !u.Reset && len(u.Subagents) > 0 {
-		state.Subagents = mergeSubagents(state.Subagents, u.Subagents)
+// overlayTime sets *dst to v unless v.IsZero().
+func overlayTime(dst *time.Time, v time.Time) {
+	if !v.IsZero() {
+		*dst = v
 	}
-
-	return state
 }
 
 // mergeStartedAt picks the session start time. Sources report the first
@@ -695,42 +753,18 @@ func mergeSubagents(existing, incoming []session.SubagentState) []session.Subage
 }
 
 func overlaySubagent(dst, src session.SubagentState) session.SubagentState {
-	if src.ParentID != "" {
-		dst.ParentID = src.ParentID
-	}
-	if src.Slug != "" {
-		dst.Slug = src.Slug
-	}
-	if src.Activity != "" {
-		dst.Activity = src.Activity
-	}
-	if src.CurrentTool != "" {
-		dst.CurrentTool = src.CurrentTool
-	}
-	if !src.StartedAt.IsZero() {
-		dst.StartedAt = src.StartedAt
-	}
-	if !src.LastActivityAt.IsZero() {
-		dst.LastActivityAt = src.LastActivityAt
-	}
-	if src.Model != "" {
-		dst.Model = src.Model
-	}
-	if src.ContextTokens != 0 {
-		dst.ContextTokens = src.ContextTokens
-	}
-	if src.OutputTokens != 0 {
-		dst.OutputTokens = src.OutputTokens
-	}
-	if src.MessageCount != 0 {
-		dst.MessageCount = src.MessageCount
-	}
-	if src.ToolCallCount != 0 {
-		dst.ToolCallCount = src.ToolCallCount
-	}
-	if !src.CompletedAt.IsZero() {
-		dst.CompletedAt = src.CompletedAt
-	}
+	overlay(&dst.ParentID, src.ParentID)
+	overlay(&dst.Slug, src.Slug)
+	overlay(&dst.Activity, src.Activity)
+	overlay(&dst.CurrentTool, src.CurrentTool)
+	overlayTime(&dst.StartedAt, src.StartedAt)
+	overlayTime(&dst.LastActivityAt, src.LastActivityAt)
+	overlay(&dst.Model, src.Model)
+	overlay(&dst.ContextTokens, src.ContextTokens)
+	overlay(&dst.OutputTokens, src.OutputTokens)
+	overlay(&dst.MessageCount, src.MessageCount)
+	overlay(&dst.ToolCallCount, src.ToolCallCount)
+	overlayTime(&dst.CompletedAt, src.CompletedAt)
 	return dst
 }
 
