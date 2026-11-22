@@ -7,6 +7,28 @@ import (
 	"testing"
 )
 
+func TestReadFromCursor_CorruptCursorResets(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f.jsonl")
+	if err := os.WriteFile(path, []byte("a\nb\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range []string{"not-a-number", "{bad", `{"offset":-1}`} {
+		res, next, reset, err := ReadFromCursor(path, c, Options{})
+		if err != nil {
+			t.Fatalf("%q: %v", c, err)
+		}
+		if !reset || len(res.Lines) != 2 {
+			t.Errorf("%q: reset=%v lines=%d, want reset with 2 lines", c, reset, len(res.Lines))
+		}
+		if _, err := ParsePosition(next.Encode()); err != nil || next.Offset != 4 {
+			t.Errorf("%q: next=%+v err=%v, want valid offset 4", c, next, err)
+		}
+	}
+	if _, _, reset, err := ReadFromCursor(path, "", Options{}); err != nil || reset {
+		t.Errorf("empty cursor: reset=%v err=%v, want plain read", reset, err)
+	}
+}
+
 func appendFile(t *testing.T, path, content string) {
 	t.Helper()
 	f, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)

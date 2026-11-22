@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"sync/atomic"
 	"testing"
 
 	"github.com/mrf/agentwatch/source"
@@ -94,4 +95,23 @@ func CheckRewriteResets(t *testing.T, src source.Source, h source.SessionHandle,
 	}
 	u, _ = parse("rotate", h, c)
 	wantReset("rotate", u, wantRotated)
+}
+
+// CorruptingSource wraps a Source and, while corruption is on, hands Parse an
+// unparseable cursor in place of the one the monitor persisted. It models a
+// cursor damaged between polls.
+type CorruptingSource struct {
+	source.Source
+	corrupt atomic.Bool
+}
+
+// SetCorrupt turns cursor corruption on or off.
+func (s *CorruptingSource) SetCorrupt(on bool) { s.corrupt.Store(on) }
+
+// Parse implements source.Source.
+func (s *CorruptingSource) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+	if s.corrupt.Load() {
+		c = "{corrupt"
+	}
+	return s.Source.Parse(ctx, h, c)
 }
