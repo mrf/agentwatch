@@ -2730,6 +2730,158 @@ func TestPollOnce_SubagentCompletion_DoesNotAffectParent(t *testing.T) {
 	}
 }
 
+// TestPollOnce_SubagentCompletion_ScopedToSource verifies the completion
+// sweep only terminates sessions of the same source as the reporting parent.
+func TestPollOnce_SubagentCompletion_ScopedToSource(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	srcA := mock.New(mock.WithName("a"))
+	srcB := mock.New(mock.WithName("b"))
+
+	srcA.SetHandles([]source.SessionHandle{
+		{ID: "parent-a", Source: "a", StartedAt: clk.Now()},
+		{ID: "child-a", Source: "a", StartedAt: clk.Now()},
+	})
+	srcB.SetHandles([]source.SessionHandle{
+		{ID: "other-b", Source: "b", StartedAt: clk.Now()},
+	})
+
+	parentUpdate := func(act session.Activity) source.SourceUpdate {
+		return source.SourceUpdate{
+			SessionID: "parent-a",
+			Slug:      "parent-slug",
+			Activity:  session.ActivityWorking,
+			Subagents: []session.SubagentState{
+				{ID: "tu-1", Slug: "shared-slug", Activity: act},
+			},
+		}
+	}
+	srcA.AddUpdate("parent-a", parentUpdate(session.ActivityWorking), "c1")
+	srcA.AddUpdate("child-a", source.SourceUpdate{
+		SessionID: "child-a",
+		Slug:      "shared-slug",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+	srcB.AddUpdate("other-b", source.SourceUpdate{
+		SessionID: "other-b",
+		Slug:      "shared-slug",
+		Activity:  session.ActivityWorking,
+	}, "c1")
+
+	m, err := monitor.New(
+		monitor.WithSources(srcA, srcB),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(5*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	clk.Advance(time.Second)
+	srcA.AddUpdate("parent-a", parentUpdate(session.ActivityTerminal), "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+
+	byID := make(map[string]session.SessionState)
+	for _, s := range m.Snapshot() {
+		byID[s.ID] = s
+	}
+	if got := byID["child-a"].Lifecycle; got != session.LifecycleTerminal {
+		t.Errorf("same-source child Lifecycle = %q, want terminal", got)
+	}
+	if got := byID["other-b"].Lifecycle; got != session.LifecycleActive {
+		t.Errorf("other-source session Lifecycle = %q, want active (no cross-source termination)", got)
+	}
+}
+
+// TestPollOnce_SubagentCompletion_ResumedNotReTerminated verifies the sweep
+// acts only on the transition to completed: a swept session that resumes is
+// not terminated again while the parent keeps reporting the subagent done.
+func TestPollOnce_SubagentCompletion_ResumedNotReTerminated(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+
+	src.SetHandles([]source.SessionHandle{
+		{ID: "parent", Source: "test", StartedAt: clk.Now()},
+		{ID: "child", Source: "test", StartedAt: clk.Now()},
+	})
+	parentUpdate := func(act session.Activity) source.SourceUpdate {
+		return source.SourceUpdate{
+			SessionID: "parent",
+			Slug:      "main-session",
+			Activity:  session.ActivityWorking,
+			Subagents: []session.SubagentState{
+				{ID: "tu-1", Slug: "child-slug", Activity: act},
+			},
+		}
+	}
+	childUpdate := source.SourceUpdate{
+		SessionID: "child",
+		Slug:      "child-slug",
+		Activity:  session.ActivityWorking,
+	}
+
+	src.AddUpdate("parent", parentUpdate(session.ActivityWorking), "c1")
+	src.AddUpdate("child", childUpdate, "c1")
+
+	m, err := monitor.New(
+		monitor.WithSources(src),
+		monitor.WithClock(clk),
+		monitor.WithStaleThreshold(5*time.Minute),
+	)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	ctx := context.Background()
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 1: %v", err)
+	}
+
+	lifecycleOf := func(id string) session.LifecycleState {
+		for _, s := range m.Snapshot() {
+			if s.ID == id {
+				return s.Lifecycle
+			}
+		}
+		t.Fatalf("session %q missing from snapshot", id)
+		return ""
+	}
+
+	clk.Advance(time.Second)
+	src.AddUpdate("parent", parentUpdate(session.ActivityTerminal), "c2")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 2: %v", err)
+	}
+	if got := lifecycleOf("child"); got != session.LifecycleTerminal {
+		t.Fatalf("child after completion = %q, want terminal", got)
+	}
+
+	// Child resumes with fresh data; parent has nothing new.
+	clk.Advance(time.Second)
+	src.AddUpdate("child", childUpdate, "c3")
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 3: %v", err)
+	}
+	if got := lifecycleOf("child"); got != session.LifecycleActive {
+		t.Fatalf("child after resume = %q, want active", got)
+	}
+
+	// Quiet poll: the completed subagent is still in the parent's state.
+	clk.Advance(time.Second)
+	if err := m.PollOnce(ctx); err != nil {
+		t.Fatalf("PollOnce 4: %v", err)
+	}
+	if got := lifecycleOf("child"); got != session.LifecycleActive {
+		t.Errorf("child after quiet poll = %q, want active (re-terminated by sweep)", got)
+	}
+}
+
 // TestRun_Race exercises concurrent Run + Snapshot under the race detector.
 func TestRun_Race(t *testing.T) {
 	t.Parallel()
