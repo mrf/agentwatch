@@ -1,6 +1,8 @@
 package clock_test
 
 import (
+	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -234,4 +236,67 @@ func TestFakeClock_RaceTickerAndAdvance(t *testing.T) {
 	}
 
 	<-done
+}
+
+// TestFakeClock_BlockUntilTickers_AlreadyRegistered verifies an already-met
+// count returns without blocking.
+func TestFakeClock_BlockUntilTickers_AlreadyRegistered(t *testing.T) {
+	fc := clock.NewFake(epoch)
+	fc.NewTicker(time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := fc.BlockUntilTickers(ctx, 1); err != nil {
+		t.Fatalf("BlockUntilTickers: %v", err)
+	}
+}
+
+// TestFakeClock_BlockUntilTickers_WaitsForRegistration verifies the call
+// blocks until another goroutine registers the ticker, and that an Advance
+// issued afterwards is not lost.
+func TestFakeClock_BlockUntilTickers_WaitsForRegistration(t *testing.T) {
+	fc := clock.NewFake(epoch)
+	tickerCh := make(chan clock.Ticker, 1)
+	go func() {
+		time.Sleep(20 * time.Millisecond)
+		tickerCh <- fc.NewTicker(time.Second)
+	}()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := fc.BlockUntilTickers(ctx, 1); err != nil {
+		t.Fatalf("BlockUntilTickers: %v", err)
+	}
+	tk := <-tickerCh
+	fc.Advance(time.Second)
+	select {
+	case <-tk.C():
+	default:
+		t.Fatal("tick lost: Advance after BlockUntilTickers did not fire the ticker")
+	}
+}
+
+// TestFakeClock_BlockUntilTickers_ContextCanceled verifies an unmet count
+// returns the context error instead of blocking forever.
+func TestFakeClock_BlockUntilTickers_ContextCanceled(t *testing.T) {
+	fc := clock.NewFake(epoch)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := fc.BlockUntilTickers(ctx, 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("BlockUntilTickers = %v, want %v", err, context.DeadlineExceeded)
+	}
+}
+
+// TestFakeClock_BlockUntilTickers_IgnoresStopped verifies stopped tickers do
+// not count toward n.
+func TestFakeClock_BlockUntilTickers_IgnoresStopped(t *testing.T) {
+	fc := clock.NewFake(epoch)
+	fc.NewTicker(time.Second).Stop()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	if err := fc.BlockUntilTickers(ctx, 1); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("BlockUntilTickers = %v, want %v", err, context.DeadlineExceeded)
+	}
 }
