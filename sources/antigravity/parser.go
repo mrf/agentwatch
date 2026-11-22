@@ -66,6 +66,7 @@ type parseResult struct {
 	currentTool string
 
 	// contextTokens and outputTokens from the latest model usageMetadata.
+	hasTokens     bool
 	contextTokens int
 	outputTokens  int
 
@@ -112,6 +113,7 @@ func parseSession(data []byte) (parseResult, error) {
 
 			// Capture token counts from the last model turn that carries them.
 			if msg.UsageMetadata != nil {
+				r.hasTokens = true
 				r.contextTokens = msg.UsageMetadata.InputTokenCount
 				r.outputTokens = msg.UsageMetadata.OutputTokenCount
 			}
@@ -144,6 +146,7 @@ func buildUpdate(r parseResult, id, workingDir string, msgDelta, toolDelta int) 
 		SessionID:          id,
 		Activity:           r.activity,
 		Model:              r.model,
+		HasTokens:          r.hasTokens,
 		ContextTokens:      r.contextTokens,
 		OutputTokens:       r.outputTokens,
 		MessageCountDelta:  msgDelta,

@@ -209,6 +209,7 @@ type accumulator struct {
 	workingDir       string
 	activity         session.Activity
 	currentTool      string
+	hasTokens        bool
 	contextTokens    int
 	outputTokens     int
 	maxContextTokens int
@@ -224,6 +225,7 @@ func (a *accumulator) toUpdate() source.SourceUpdate {
 		WorkingDir:         a.workingDir,
 		Activity:           a.activity,
 		CurrentTool:        a.currentTool,
+		HasTokens:          a.hasTokens,
 		ContextTokens:      a.contextTokens,
 		OutputTokens:       a.outputTokens,
 		MaxContextTokens:   a.maxContextTokens,
@@ -509,6 +511,7 @@ func parseTokenCountInfo(info json.RawMessage, a *accumulator) {
 		return
 	}
 	if nested.LastTokenUsage != nil {
+		a.hasTokens = true
 		a.contextTokens = nested.LastTokenUsage.InputTokens
 		a.outputTokens = nested.LastTokenUsage.OutputTokens
 	}
@@ -530,9 +533,11 @@ func parseTokenCountFlat(payload json.RawMessage, a *accumulator) {
 	}
 	if flat.InputTokens > 0 {
 		a.contextTokens = flat.InputTokens
+		a.hasTokens = true
 	}
 	if flat.OutputTokens > 0 {
 		a.outputTokens = flat.OutputTokens
+		a.hasTokens = true
 	}
 	if flat.ModelContextWindow > 0 {
 		a.maxContextTokens = flat.ModelContextWindow

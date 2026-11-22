@@ -478,9 +478,13 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 		state.Model = u.Model
 	}
 
-	state.ContextTokens = u.ContextTokens
-	state.OutputTokens = u.OutputTokens
-	state.TokenEstimated = u.TokenEstimated
+	// Non-zero counts apply without HasTokens so sources written before the
+	// flag existed keep working.
+	if u.HasTokens || u.ContextTokens != 0 || u.OutputTokens != 0 || u.TokenEstimated {
+		state.ContextTokens = u.ContextTokens
+		state.OutputTokens = u.OutputTokens
+		state.TokenEstimated = u.TokenEstimated
+	}
 	if u.MaxContextTokens > 0 {
 		state.MaxContextTokens = u.MaxContextTokens
 	}

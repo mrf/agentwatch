@@ -61,6 +61,12 @@ type SourceUpdate struct {
 	Activity session.Activity `json:"activity"`
 	Model    string           `json:"model,omitempty"`
 
+	// HasTokens marks ContextTokens, OutputTokens and TokenEstimated as
+	// reported by this update. When it is false and all three are zero, the
+	// monitor keeps the session's previous token counts instead of zeroing
+	// them. A source that parsed usage must set it, which also lets it report
+	// a genuine zero.
+	HasTokens        bool `json:"hasTokens,omitempty"`
 	ContextTokens    int  `json:"contextTokens"`
 	OutputTokens     int  `json:"outputTokens,omitempty"`
 	MaxContextTokens int  `json:"maxContextTokens"`

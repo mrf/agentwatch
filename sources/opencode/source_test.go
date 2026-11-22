@@ -221,6 +221,9 @@ func TestParseSessionData(t *testing.T) {
 	assertEqual(t, "Slug", u.Slug, "build-it")
 	assertEqual(t, "Model", u.Model, "claude-sonnet-4-20250514")
 	assertEqual(t, "WorkingDir", u.WorkingDir, "/home/user/project")
+	if !u.HasTokens {
+		t.Error("HasTokens = false, want true (session row carries token counts)")
+	}
 	assertInt(t, "ContextTokens", u.ContextTokens, 5000)
 	assertInt(t, "OutputTokens", u.OutputTokens, 200)
 	assertInt(t, "MessageCountDelta", u.MessageCountDelta, 2)

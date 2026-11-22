@@ -113,6 +113,7 @@ type SourceUpdate struct {
     WorkingDir string          // current working directory
     Branch    string           // current git branch
 
+    HasTokens        bool      // true when this update carries token counts
     ContextTokens    int       // absolute token counts (not deltas)
     OutputTokens     int
     MaxContextTokens int
@@ -133,7 +134,7 @@ type SourceUpdate struct {
 }
 ```
 
-**Delta vs absolute fields:** token counts (`ContextTokens`, `OutputTokens`, `MaxContextTokens`) are absolute — pass the current total. Message and tool call counts are deltas — pass the number of new events since the last `Parse` call; the monitor adds them to the running total.
+**Delta vs absolute fields:** token counts (`ContextTokens`, `OutputTokens`, `MaxContextTokens`) are absolute — pass the current total, and set `HasTokens` when the update carries them. An update with `HasTokens` false and zero counts leaves the session's previous counts untouched, so a batch without a usage record does not reset them; `MaxContextTokens` likewise only applies when non-zero. Message and tool call counts are deltas — pass the number of new events since the last `Parse` call; the monitor adds them to the running total.
 
 ## Signaling Termination
 

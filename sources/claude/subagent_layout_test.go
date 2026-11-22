@@ -227,9 +227,9 @@ func TestParse_SubagentLayout_OnlySubagentChanged(t *testing.T) {
 	if update.MessageCountDelta != 0 {
 		t.Errorf("parent MessageCountDelta: got %d, want 0", update.MessageCountDelta)
 	}
-	// Re-reports the parent's last tokens so the monitor does not zero them.
-	if update.ContextTokens != 100 || update.OutputTokens != 5 {
-		t.Errorf("parent tokens: got ctx=%d out=%d, want 100/5", update.ContextTokens, update.OutputTokens)
+	// No usage in this batch: tokens stay unset so the monitor keeps the parent's.
+	if update.HasTokens || update.ContextTokens != 0 || update.OutputTokens != 0 {
+		t.Errorf("parent tokens: got has=%v ctx=%d out=%d, want unset", update.HasTokens, update.ContextTokens, update.OutputTokens)
 	}
 	a2, ok := subagentByID(update.Subagents, layoutAgent2)
 	if !ok {
