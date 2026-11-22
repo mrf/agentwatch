@@ -14,6 +14,7 @@ package cursor
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -150,6 +151,11 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	update.WorkingDir = h.WorkingDir
 	if len(lines) > 0 {
 		update.SessionID = h.ID
+		// Transcript lines carry no timestamps; the file's mtime is the only
+		// activity signal. A failed stat just leaves LastActivityAt unset.
+		if fi, statErr := os.Stat(h.Path); statErr == nil {
+			update.LastActivityAt = fi.ModTime()
+		}
 	}
 	next := source.Cursor(strconv.FormatInt(nextOffset, 10))
 	return update, next, nil

@@ -26,7 +26,10 @@ type Monitor struct {
 	store   map[string]session.SessionState
 	cursors map[string]source.Cursor // "source:sessionID" -> cursor
 	removed map[string]struct{}      // session IDs removed by retention sweep
-	health  map[string]*sourceHealth // keyed by source name
+	// contentStart holds IDs whose StartedAt came from source content rather
+	// than the Discover-time handle (see mergeStartedAt).
+	contentStart map[string]struct{}
+	health       map[string]*sourceHealth // keyed by source name
 
 	seq atomic.Uint64
 }
@@ -44,12 +47,13 @@ func New(opts ...Option) (*Monitor, error) {
 	}
 
 	return &Monitor{
-		cfg:     cfg,
-		pollSem: make(chan struct{}, 1),
-		store:   make(map[string]session.SessionState),
-		cursors: make(map[string]source.Cursor),
-		removed: make(map[string]struct{}),
-		health:  make(map[string]*sourceHealth),
+		cfg:          cfg,
+		pollSem:      make(chan struct{}, 1),
+		store:        make(map[string]session.SessionState),
+		cursors:      make(map[string]source.Cursor),
+		removed:      make(map[string]struct{}),
+		contentStart: make(map[string]struct{}),
+		health:       make(map[string]*sourceHealth),
 	}, nil
 }
 
@@ -158,6 +162,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			}
 
 			_, wasRemoved := m.removed[h.ID]
+			_, fromContent := m.contentStart[h.ID]
 
 			switch {
 			case !existed:
@@ -167,7 +172,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 					Lifecycle: session.LifecycleActive,
 					StartedAt: h.StartedAt,
 				}
-				state = applyUpdate(base, update, now)
+				state = applyUpdate(base, update, now, false)
 				lcEvent.To = session.LifecycleActive
 
 				if wasRemoved {
@@ -179,7 +184,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				}
 
 			case existing.Lifecycle == session.LifecycleTerminal:
-				state = applyUpdate(existing, update, now)
+				state = applyUpdate(existing, update, now, fromContent)
 				state.Lifecycle = session.LifecycleActive
 				state.CompletedAt = nil
 				lcEvent.Type = session.EventResumed
@@ -187,7 +192,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				lcEvent.To = session.LifecycleActive
 
 			case update.Terminal:
-				state = applyUpdate(existing, update, now)
+				state = applyUpdate(existing, update, now, fromContent)
 				state.Lifecycle = session.LifecycleTerminal
 				endedAt := update.EndedAt
 				if endedAt.IsZero() {
@@ -200,13 +205,16 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				lcEvent.Reason = update.EndReason
 
 			default:
-				state = applyUpdate(existing, update, now)
+				state = applyUpdate(existing, update, now, fromContent)
 				lcEvent.Type = session.EventUpdated
 				lcEvent.From = session.LifecycleActive
 				lcEvent.To = session.LifecycleActive
 			}
 
 			m.store[h.ID] = state
+			if !update.StartedAt.IsZero() {
+				m.contentStart[h.ID] = struct{}{}
+			}
 			cloned := state.Clone()
 
 			m.mu.Unlock()
@@ -327,6 +335,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 			continue
 		}
 		delete(m.store, id)
+		delete(m.contentStart, id)
 		m.removed[id] = struct{}{}
 		removedIDs = append(removedIDs, id)
 
@@ -485,7 +494,9 @@ func (m *Monitor) Health() map[string]Health {
 // applyUpdate merges a SourceUpdate into a SessionState.
 // Delta fields (MessageCountDelta, ToolCallCountDelta) are accumulated.
 // Current-state fields are overwritten when the source provides a value.
-func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Time) session.SessionState {
+// startFromContent reports whether state.StartedAt already came from source
+// content rather than the Discover-time handle.
+func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Time, startFromContent bool) session.SessionState {
 	if u.Slug != "" {
 		state.Slug = u.Slug
 	}
@@ -523,9 +534,7 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 	if u.Branch != "" {
 		state.Branch = u.Branch
 	}
-	if !u.StartedAt.IsZero() {
-		state.StartedAt = u.StartedAt
-	}
+	state.StartedAt = mergeStartedAt(state.StartedAt, startFromContent, u.StartedAt)
 	if !u.LastActivityAt.IsZero() {
 		state.LastActivityAt = u.LastActivityAt
 	}
@@ -536,6 +545,22 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 	}
 
 	return state
+}
+
+// mergeStartedAt picks the session start time. Sources report the first
+// timestamp of each parsed batch, so later batches carry later times; the
+// earliest content timestamp wins. The Discover-time handle value is a file
+// mtime, not a start time: the first content timestamp always replaces it,
+// even when it is later, so an mtime that predates the first record cannot
+// pin a wrong start. A zero incoming value changes nothing.
+func mergeStartedAt(cur time.Time, curFromContent bool, in time.Time) time.Time {
+	if in.IsZero() {
+		return cur
+	}
+	if !curFromContent || cur.IsZero() || in.Before(cur) {
+		return in
+	}
+	return cur
 }
 
 // mergeSubagents merges incoming subagents into existing by ID and returns a
