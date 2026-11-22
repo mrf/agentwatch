@@ -76,7 +76,8 @@ type EventSink interface {
    broadcaster) must wrap themselves in an async queue internally.
 4. The default `MultiSink` delivers to all registered sinks sequentially and
    returns a joined error if any sink fails.
-5. Sink errors are logged and surfaced through monitor health. They do **not**
+5. Sink errors are logged only; they are not surfaced through monitor health (a
+   sink-error counter in `Health` is a possible future addition). They do **not**
    roll back committed state.
 6. `Removed` events are part of the core event model. Transports must not
    invent separate removal semantics.

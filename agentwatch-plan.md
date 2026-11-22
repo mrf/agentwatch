@@ -388,7 +388,7 @@ Delivery contract:
 - Events are delivered after state commit and outside store locks.
 - A sink must return quickly. Long-running sinks should wrap themselves in an async queue.
 - Default `MultiSink` delivers sequentially and returns a joined error.
-- Sink errors are logged and surfaced through monitor health. They do not roll back committed state.
+- Sink errors are logged only (`Monitor` logs a warning); they are not surfaced through monitor health. A sink-error counter in `Health` is a possible future addition. They do not roll back committed state.
 - `Removed` events are part of the core event model. Transports should not invent their own removal semantics.
 - A replay recorder should be implementable as an `EventSink` without library changes.
 
