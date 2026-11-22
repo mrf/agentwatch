@@ -378,3 +378,34 @@ func mustWriteFile(t *testing.T, path, content string) {
 		t.Fatal(err)
 	}
 }
+
+// Cursor transcript lines carry no timestamps, so LastActivityAt is the file's
+// modification time once new lines were read, and StartedAt is left to the
+// Discover handle.
+func TestParseSetsLastActivityAtFromFileModTime(t *testing.T) {
+	h := writeTranscript(t, "home-user-myapp", "sess-mtime", flatFixture)
+	mtime := time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC)
+	if err := os.Chtimes(h.Path, mtime, mtime); err != nil {
+		t.Fatal(err)
+	}
+	src := cursor.New()
+
+	u, c, err := src.Parse(context.Background(), h, "")
+	if err != nil {
+		t.Fatalf("Parse error: %v", err)
+	}
+	if !u.LastActivityAt.Equal(mtime) {
+		t.Errorf("LastActivityAt = %v, want %v", u.LastActivityAt, mtime)
+	}
+	if !u.StartedAt.IsZero() {
+		t.Errorf("StartedAt = %v, want zero (transcripts have no start timestamp)", u.StartedAt)
+	}
+
+	u2, _, err := src.Parse(context.Background(), h, c)
+	if err != nil {
+		t.Fatalf("second Parse error: %v", err)
+	}
+	if !u2.LastActivityAt.IsZero() {
+		t.Errorf("no-data LastActivityAt = %v, want zero", u2.LastActivityAt)
+	}
+}
