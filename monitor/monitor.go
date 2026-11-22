@@ -625,6 +625,20 @@ func (m *Monitor) Snapshot() []session.SessionState {
 	return states
 }
 
+// SnapshotWithSeq returns a deep copy of all tracked sessions together with
+// the Seq of the most recently assigned event (0 if none yet).
+//
+// Every event with Seq <= the returned seq committed its state before that seq
+// was assigned, so the sessions already reflect it. Events with a higher Seq
+// may or may not be reflected, so a consumer that bootstraps from this
+// snapshot must apply only events with Seq > the returned seq.
+func (m *Monitor) SnapshotWithSeq() ([]session.SessionState, uint64) {
+	// seq is read before the store: reading it after could claim a Seq whose
+	// state the snapshot missed, but never the reverse.
+	seq := m.seq.Load()
+	return m.Snapshot(), seq
+}
+
 // Get returns a deep copy of the session with the given ID and true,
 // or a zero SessionState and false if no session with that ID exists.
 func (m *Monitor) Get(id string) (session.SessionState, bool) {
