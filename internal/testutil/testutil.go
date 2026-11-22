@@ -7,8 +7,17 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
+
+// SkipOnWindows skips t on Windows, naming the POSIX behavior it depends on.
+func SkipOnWindows(t testing.TB, reason string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("skipped on windows: " + reason)
+	}
+}
 
 // RequireNoError fails t immediately if err is non-nil.
 func RequireNoError(t testing.TB, err error) {

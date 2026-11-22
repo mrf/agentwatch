@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mrf/agentwatch/internal/testutil"
 	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/source"
 )
@@ -152,6 +153,7 @@ func TestParseSubagentFile_SidechainRecordsStillCounted(t *testing.T) {
 }
 
 func TestDecodeProjectPath_DotEncodedComponent(t *testing.T) {
+	testutil.SkipOnWindows(t, "decodeProjectPath only reconstructs slash-separated POSIX paths")
 	// Claude Code encodes '.' as '-' too: /x/proj/.claude/wt → -x-proj--claude-wt.
 	root := t.TempDir()
 	dotDir := filepath.Join(root, "proj", ".claude", "wt")

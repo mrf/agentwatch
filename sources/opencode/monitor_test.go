@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/mrf/agentwatch/internal/clock"
+	"github.com/mrf/agentwatch/internal/testutil"
 	"github.com/mrf/agentwatch/monitor"
 	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/source"
@@ -237,6 +238,9 @@ func TestParseLegacyCursorAccepted(t *testing.T) {
 func TestDBPathWithSpecialCharsOpens(t *testing.T) {
 	for _, name := range []string{"what?ever", "a#b", "100%", "sp ace"} {
 		t.Run(name, func(t *testing.T) {
+			if name == "what?ever" {
+				testutil.SkipOnWindows(t, "'?' is not a valid filename character")
+			}
 			// Seed at a plain path (the driver would parse '?' in a raw DSN),
 			// then move the file under the awkward directory name.
 			plain := seedFileDB(t, func(db *sql.DB) {
@@ -307,6 +311,7 @@ func TestDBFileCreatedAfterFirstPollIsPickedUp(t *testing.T) {
 }
 
 func TestReplacedDBFileIsReopened(t *testing.T) {
+	testutil.SkipOnWindows(t, "removing a database file the source still holds open is a sharing violation")
 	dbPath := filepath.Join(t.TempDir(), "opencode.db")
 	build := func(id string) {
 		if err := os.Remove(dbPath); err != nil && !os.IsNotExist(err) {

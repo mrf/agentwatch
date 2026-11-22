@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/mrf/agentwatch/internal/jsonl"
+	"github.com/mrf/agentwatch/internal/testutil"
 	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/source"
 )
@@ -1313,6 +1314,7 @@ func TestRegister(t *testing.T) {
 // --- Project path encoding/decoding tests ---
 
 func TestEncodeProjectPath(t *testing.T) {
+	testutil.SkipOnWindows(t, "encodeProjectPath implements the POSIX project-dir scheme; filepath.Clean emits backslashes")
 	cases := []struct {
 		input string
 		want  string
@@ -1348,6 +1350,7 @@ func TestDecodeProjectPath_FallbackAllDashes(t *testing.T) {
 }
 
 func TestDecodeProjectPath_RoundTrip(t *testing.T) {
+	testutil.SkipOnWindows(t, "decodeProjectPath only reconstructs slash-separated POSIX paths")
 	// On a path that actually exists on the filesystem, encode->decode should
 	// round-trip to the original path (the filesystem-verified result).
 	original := t.TempDir() // guaranteed to exist

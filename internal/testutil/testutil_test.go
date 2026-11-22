@@ -4,11 +4,23 @@ import (
 	"bytes"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/mrf/agentwatch/internal/testutil"
 )
+
+func TestSkipOnWindows(t *testing.T) {
+	ran := false
+	t.Run("inner", func(t *testing.T) {
+		testutil.SkipOnWindows(t, "reason")
+		ran = true
+	})
+	if want := runtime.GOOS != "windows"; ran != want {
+		t.Errorf("body ran = %v on %s, want %v", ran, runtime.GOOS, want)
+	}
+}
 
 func TestRequireNoError_Nil(t *testing.T) {
 	// A nil error must not cause the test to fail.
