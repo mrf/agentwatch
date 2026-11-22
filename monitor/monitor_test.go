@@ -905,6 +905,60 @@ func TestPollOnce_SubagentsPropagated(t *testing.T) {
 	}
 }
 
+func TestPollOnce_SubagentsMergedByIDAcrossPolls(t *testing.T) {
+	t.Parallel()
+	clk := testClock()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{
+		{ID: "s1", Source: "test", StartedAt: clk.Now()},
+	})
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Subagents: []session.SubagentState{{
+			ID: "sub-1", Slug: "child", Model: "m1", Activity: session.ActivityWorking,
+			StartedAt: clk.Now(), MessageCount: 4, ToolCallCount: 2, ContextTokens: 50,
+		}},
+	}, "c1")
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Subagents: []session.SubagentState{{ID: "sub-2", Activity: session.ActivityWorking}},
+	}, "c2")
+	completedAt := clk.Now().Add(time.Minute)
+	src.AddUpdate("s1", source.SourceUpdate{
+		SessionID: "s1",
+		Subagents: []session.SubagentState{{ID: "sub-1", Activity: session.ActivityTerminal, CompletedAt: completedAt}},
+	}, "c3")
+
+	m, err := monitor.New(monitor.WithSources(src), monitor.WithClock(clk))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := 0; i < 3; i++ {
+		if err := m.PollOnce(context.Background()); err != nil {
+			t.Fatalf("PollOnce %d: %v", i, err)
+		}
+	}
+
+	got, ok := m.Get("s1")
+	if !ok {
+		t.Fatal("session s1 missing")
+	}
+	if len(got.Subagents) != 2 {
+		t.Fatalf("expected 2 subagents, got %d: %+v", len(got.Subagents), got.Subagents)
+	}
+	sub1 := got.Subagents[0]
+	if sub1.ID != "sub-1" || got.Subagents[1].ID != "sub-2" {
+		t.Fatalf("order: got %q,%q want sub-1,sub-2", sub1.ID, got.Subagents[1].ID)
+	}
+	if sub1.Activity != session.ActivityTerminal || !sub1.CompletedAt.Equal(completedAt) {
+		t.Errorf("sub-1 completion not applied: %+v", sub1)
+	}
+	if sub1.Slug != "child" || sub1.Model != "m1" || sub1.MessageCount != 4 || sub1.ToolCallCount != 2 ||
+		sub1.ContextTokens != 50 || !sub1.StartedAt.Equal(clk.Now()) {
+		t.Errorf("sparse update wiped sub-1 fields: %+v", sub1)
+	}
+}
+
 // --- PollOnce: terminal with default EndedAt ---
 
 func TestPollOnce_TerminalDefaultEndedAt(t *testing.T) {

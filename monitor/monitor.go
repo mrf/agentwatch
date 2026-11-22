@@ -510,11 +510,74 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 	state.LastDataReceivedAt = now
 
 	if len(u.Subagents) > 0 {
-		state.Subagents = make([]session.SubagentState, len(u.Subagents))
-		copy(state.Subagents, u.Subagents)
+		state.Subagents = mergeSubagents(state.Subagents, u.Subagents)
 	}
 
 	return state
+}
+
+// mergeSubagents merges incoming subagents into existing by ID and returns a
+// new slice. Subagents absent from incoming are kept, new IDs are appended in
+// incoming order, and for a matching ID only incoming non-zero fields
+// overwrite, so a sparse update (e.g. a completion) cannot wipe known state.
+func mergeSubagents(existing, incoming []session.SubagentState) []session.SubagentState {
+	out := make([]session.SubagentState, len(existing), len(existing)+len(incoming))
+	copy(out, existing)
+	index := make(map[string]int, len(out))
+	for i := 0; i < len(out); i++ {
+		index[out[i].ID] = i
+	}
+	for i := 0; i < len(incoming); i++ {
+		in := incoming[i]
+		j, ok := index[in.ID]
+		if !ok {
+			index[in.ID] = len(out)
+			out = append(out, in)
+			continue
+		}
+		out[j] = overlaySubagent(out[j], in)
+	}
+	return out
+}
+
+func overlaySubagent(dst, src session.SubagentState) session.SubagentState {
+	if src.ParentID != "" {
+		dst.ParentID = src.ParentID
+	}
+	if src.Slug != "" {
+		dst.Slug = src.Slug
+	}
+	if src.Activity != "" {
+		dst.Activity = src.Activity
+	}
+	if src.CurrentTool != "" {
+		dst.CurrentTool = src.CurrentTool
+	}
+	if !src.StartedAt.IsZero() {
+		dst.StartedAt = src.StartedAt
+	}
+	if !src.LastActivityAt.IsZero() {
+		dst.LastActivityAt = src.LastActivityAt
+	}
+	if src.Model != "" {
+		dst.Model = src.Model
+	}
+	if src.ContextTokens != 0 {
+		dst.ContextTokens = src.ContextTokens
+	}
+	if src.OutputTokens != 0 {
+		dst.OutputTokens = src.OutputTokens
+	}
+	if src.MessageCount != 0 {
+		dst.MessageCount = src.MessageCount
+	}
+	if src.ToolCallCount != 0 {
+		dst.ToolCallCount = src.ToolCallCount
+	}
+	if !src.CompletedAt.IsZero() {
+		dst.CompletedAt = src.CompletedAt
+	}
+	return dst
 }
 
 // Snapshot returns a deep copy of all currently tracked sessions.
