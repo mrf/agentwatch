@@ -231,6 +231,7 @@ func New(opts ...Option) (*Monitor, error)
 func (m *Monitor) Run(ctx context.Context) error
 func (m *Monitor) PollOnce(ctx context.Context) error
 func (m *Monitor) Snapshot() []session.SessionState
+func (m *Monitor) SnapshotWithSeq() ([]session.SessionState, uint64)
 func (m *Monitor) Health() []Health
 
 func WithSources(sources ...source.Source) Option
@@ -586,6 +587,8 @@ type Authenticator interface {
     Authenticate(r *http.Request) (Identity, bool)
 }
 ```
+
+Snapshot/delta contract: the first message on every connection is an `EventSnapshot` whose `Seq` is the monitor's sequence number when the snapshot was taken (`Monitor.SnapshotWithSeq`; 0 before any event). The snapshot reflects all events with `Seq` <= its own; clients drop any later-arriving event with `Seq` <= the snapshot's. Events emitted while the snapshot is being built are held behind it. There is no resume: an evicted or disconnected client reconnects for a fresh snapshot.
 
 The WebSocket protocol should wrap `monitor.Event`. It should not define separate racer-era message types. If `agent-racer` needs overtake or achievement events, those live in `agent-racer`.
 

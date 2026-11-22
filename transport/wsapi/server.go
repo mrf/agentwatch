@@ -18,8 +18,17 @@ import (
 // monitor.EventSink: events from the monitor are fanned out to all
 // connected WebSocket clients.
 //
-// On connect, clients receive an initial snapshot event. Subsequent events
-// (deltas, lifecycle, health) are delivered as they arrive from the monitor.
+// On connect, clients receive an initial snapshot event as their first
+// message. Subsequent events (deltas, lifecycle, health) are delivered as they
+// arrive from the monitor.
+//
+// Seq contract: the snapshot's Seq is the monitor's event sequence number when
+// the snapshot was taken (0 if no event has been emitted yet), and the
+// snapshot reflects every event with Seq <= its own. Events already in flight
+// at connect time may still arrive after the snapshot; clients must drop any
+// event whose Seq is <= the snapshot's. There is no resume point: a client
+// that is evicted as a slow consumer or disconnects reconnects to receive a
+// fresh snapshot.
 type Server struct {
 	mon         *monitor.Monitor
 	cfg         serverConfig
@@ -30,6 +39,9 @@ type Server struct {
 
 	mu      sync.Mutex
 	stopped bool // guarded by mu; checked in ServeHTTP
+
+	// afterRegister is a test seam; see SetAfterRegisterHook.
+	afterRegister func()
 }
 
 // NewServer creates a WebSocket server that broadcasts monitor events
@@ -124,8 +136,16 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	s.logger.Info("ws client connected", "addr", r.RemoteAddr)
 
-	// Send initial snapshot.
-	s.sendSnapshot(c)
+	if s.afterRegister != nil {
+		s.afterRegister()
+	}
+
+	// The client is registered, so every event with a Seq above the snapshot's
+	// reaches it, held behind the snapshot by conn.prime.
+	if !s.sendSnapshot(c) {
+		s.bcast.removeConn(c)
+		return
+	}
 
 	// Start write pump in background.
 	go s.writePump(c) //nolint:contextcheck // lifetime is bound to c.send closing, not the request context
@@ -166,10 +186,12 @@ func (s *Server) ClientCount() int {
 	return s.bcast.clientCount()
 }
 
-// sendSnapshot sends a full snapshot event to a single client.
-func (s *Server) sendSnapshot(c *conn) {
-	sessions := s.mon.Snapshot()
+// sendSnapshot builds a snapshot stamped with the monitor's seq and queues it
+// as the connection's first message. Returns false if it could not be queued.
+func (s *Server) sendSnapshot(c *conn) bool {
+	sessions, seq := s.mon.SnapshotWithSeq()
 	ev := monitor.Event{
+		Seq:      seq,
 		Type:     monitor.EventSnapshot,
 		At:       time.Now(),
 		Sessions: sessions,
@@ -177,9 +199,9 @@ func (s *Server) sendSnapshot(c *conn) {
 	data, err := json.Marshal(applyPolicy(s.cfg.policy, ev))
 	if err != nil {
 		s.logger.Warn("snapshot marshal failed", "error", err)
-		return
+		return false
 	}
-	c.trySend(data)
+	return c.prime(data)
 }
 
 // writePump drains the send channel and writes messages to the WebSocket.
