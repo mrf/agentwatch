@@ -14,6 +14,8 @@ import (
 // maxHeadLen caps how many leading bytes of a file a Position hashes.
 const maxHeadLen = 4096
 
+var errInvalidPosition = errors.New("jsonl: invalid position")
+
 // Position is a resumable read position in a file: a byte offset plus enough
 // identity to tell whether the file at a path is still the one the offset was
 // taken from. The zero value reads from the start of the file.
@@ -81,7 +83,7 @@ func ReadFromCursor(path, cursor string, opts Options) (res Result, next Positio
 // Validate reports an error if p could not have come from ReadFrom.
 func (p Position) Validate() error {
 	if p.Offset < 0 || p.HeadLen < 0 || p.HeadLen > maxHeadLen || int64(p.HeadLen) > p.Offset {
-		return fmt.Errorf("jsonl: invalid position %+v", p)
+		return fmt.Errorf("%w %+v", errInvalidPosition, p)
 	}
 	return nil
 }
@@ -164,7 +166,7 @@ func headSum(f *os.File, n int) (sum uint64, complete bool, err error) {
 		if errors.Is(err, io.EOF) {
 			return 0, false, nil
 		}
-		return 0, false, err
+		return 0, false, fmt.Errorf("jsonl: read head: %w", err)
 	}
 	h := fnv.New64a()
 	_, _ = h.Write(buf) // hash.Hash writes never fail

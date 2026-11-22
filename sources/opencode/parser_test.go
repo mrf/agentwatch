@@ -3,6 +3,7 @@ package opencode
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 )
@@ -38,8 +39,8 @@ func TestDecodeCursorInvalid(t *testing.T) {
 	cases := []string{"abc", "1", "1,2,3", "x,1", "1,x", "1,2,3,4,5,x", "1,2,3,4,5,3", "1,2,3,4,5,-1", "1,2,3,4,5,0,2", "1,2,3,4,5,0,x"}
 	for _, tc := range cases {
 		_, err := decodeCursor(tc)
-		if err == nil {
-			t.Errorf("decodeCursor(%q) expected error, got nil", tc)
+		if !errors.Is(err, errInvalidCursor) {
+			t.Errorf("decodeCursor(%q) error = %v, want errInvalidCursor", tc, err)
 		}
 	}
 }

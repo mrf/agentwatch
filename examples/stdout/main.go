@@ -40,7 +40,7 @@ func main() {
 	sink := monitor.EventSinkFunc(func(_ context.Context, ev monitor.Event) error {
 		data, err := json.MarshalIndent(ev, "", "  ")
 		if err != nil {
-			return err
+			return fmt.Errorf("marshal event: %w", err)
 		}
 		fmt.Println(string(data))
 		return nil

@@ -8,6 +8,7 @@ package filewatch
 
 import (
 	"context"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -132,7 +133,7 @@ func (w *Walker) walkRoot(ctx context.Context, root string, now time.Time) ([]En
 		if os.IsNotExist(err) {
 			return nil, nil
 		}
-		return nil, err
+		return nil, fmt.Errorf("filewatch: stat root: %w", err)
 	}
 	if !info.IsDir() {
 		return nil, nil
@@ -161,7 +162,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, isRoot bool, now time.
 	info, err := os.Stat(dir)
 	if err != nil {
 		if isRoot && !os.IsNotExist(err) {
-			return err
+			return fmt.Errorf("filewatch: stat root: %w", err)
 		}
 		return nil
 	}
@@ -210,7 +211,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, isRoot bool, now time.
 	des, err := os.ReadDir(dir)
 	if err != nil {
 		if isRoot && !os.IsNotExist(err) {
-			return err
+			return fmt.Errorf("filewatch: read root: %w", err)
 		}
 		return nil
 	}

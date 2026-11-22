@@ -122,7 +122,7 @@ func openRegular(path string) (*os.File, os.FileInfo, error) {
 
 	f, err := os.Open(path)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, fmt.Errorf("jsonl: open: %w", err)
 	}
 
 	// Re-check the opened file in case the path was swapped after the Stat.
@@ -208,7 +208,7 @@ func readLine(br *bufio.Reader, maxLine int) (line []byte, n int64, complete boo
 		case errors.Is(err, io.EOF):
 			return nil, n, false, nil
 		default:
-			return nil, n, false, err
+			return nil, n, false, fmt.Errorf("jsonl: read: %w", err)
 		}
 	}
 }

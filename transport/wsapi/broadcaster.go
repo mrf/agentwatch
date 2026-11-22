@@ -3,6 +3,7 @@ package wsapi
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"sync"
 
@@ -38,7 +39,7 @@ func (b *broadcaster) HandleEvent(_ context.Context, ev monitor.Event) error {
 	data, err := json.Marshal(applyPolicy(b.policy, ev))
 	if err != nil {
 		b.logger.Warn("event marshal failed", "error", err)
-		return err
+		return fmt.Errorf("wsapi: marshal event: %w", err)
 	}
 
 	b.mu.RLock()

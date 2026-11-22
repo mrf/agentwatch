@@ -1,11 +1,20 @@
 package jsonl
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 )
+
+func TestPositionValidate_ErrInvalidPosition(t *testing.T) {
+	for _, p := range []Position{{Offset: -1}, {Offset: 1, HeadLen: 2}, {HeadLen: -1}} {
+		if err := p.Validate(); !errors.Is(err, errInvalidPosition) {
+			t.Errorf("Validate(%+v) = %v, want errInvalidPosition", p, err)
+		}
+	}
+}
 
 func TestReadFromCursor_CorruptCursorResets(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "f.jsonl")

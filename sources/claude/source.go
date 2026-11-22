@@ -68,6 +68,8 @@ func WithMaxEndMarkerSize(bytes int) Option {
 	}
 }
 
+var errInvalidEndMarker = errors.New("invalid end marker")
+
 // End-marker validation constants. These mirror the corresponding values from
 // the agent-racer monitor for behavioural parity.
 const (
@@ -515,24 +517,24 @@ func (s *ClaudeSource) consumePendingTerminal(sessionID string) (consumedMarker,
 // (timestamp, reason) are sanitised in place rather than causing rejection.
 func validateEndMarker(marker *sessionEndMarker, now time.Time) error {
 	if marker.SessionID == "" {
-		return errors.New("empty session_id")
+		return fmt.Errorf("%w: empty session_id", errInvalidEndMarker)
 	}
 	if len(marker.SessionID) > maxSessionIDLen {
-		return fmt.Errorf("session_id too long (%d > %d)", len(marker.SessionID), maxSessionIDLen)
+		return fmt.Errorf("%w: session_id too long (%d > %d)", errInvalidEndMarker, len(marker.SessionID), maxSessionIDLen)
 	}
 	if !validSessionIDRe.MatchString(marker.SessionID) {
-		return errors.New("session_id contains invalid characters")
+		return fmt.Errorf("%w: session_id contains invalid characters", errInvalidEndMarker)
 	}
 
 	if marker.TranscriptPath != "" {
 		if len(marker.TranscriptPath) > maxTranscriptPathLen {
-			return fmt.Errorf("transcript_path too long (%d > %d)", len(marker.TranscriptPath), maxTranscriptPathLen)
+			return fmt.Errorf("%w: transcript_path too long (%d > %d)", errInvalidEndMarker, len(marker.TranscriptPath), maxTranscriptPathLen)
 		}
 		if !strings.HasSuffix(marker.TranscriptPath, ".jsonl") {
-			return errors.New("transcript_path does not end with .jsonl")
+			return fmt.Errorf("%w: transcript_path does not end with .jsonl", errInvalidEndMarker)
 		}
 		if strings.Contains(marker.TranscriptPath, "..") {
-			return errors.New("transcript_path contains path traversal")
+			return fmt.Errorf("%w: transcript_path contains path traversal", errInvalidEndMarker)
 		}
 	}
 

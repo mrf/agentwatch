@@ -85,7 +85,10 @@ func (s *Source) closeLocked() error {
 	if db == nil {
 		return nil
 	}
-	return db.Close()
+	if err := db.Close(); err != nil {
+		return fmt.Errorf("opencode: close db: %w", err)
+	}
+	return nil
 }
 
 // acquireLocked returns the long-lived read-only handle, opening it on first
