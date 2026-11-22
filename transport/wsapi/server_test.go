@@ -263,45 +263,39 @@ func TestServer_SlowClientEviction(t *testing.T) {
 		{ID: "sess-1"},
 	}
 
+	// The write timeout must comfortably exceed an unblocked write: at 1ms
+	// the snapshot write itself could time out under -race and evict the
+	// client before it connected.
 	srv, ts := newTestServer(t, sessions,
-		wsapi.WithSendBuffer(1),                  // Minimal buffer — fills after 1 queued msg.
-		wsapi.WithWriteTimeout(time.Millisecond), // Tiny timeout so writes fail once TCP buffer fills.
+		wsapi.WithSendBuffer(1),
+		wsapi.WithWriteTimeout(time.Second),
 	)
 
 	conn := dialWS(t, ts)
-	// Read snapshot so we know we're connected.
+	defer func() { _ = conn.CloseNow() }()
 	readEvent(t, conn)
 
-	// Stop reading — the TCP buffer will fill, writes will timeout,
-	// and/or the send channel will overflow triggering eviction.
-	// Send enough large events to saturate both the channel and TCP buffer.
-	bigPayload := make([]byte, 4096)
-	for i := range bigPayload {
-		bigPayload[i] = 'x'
-	}
-	for i := 0; i < 200; i++ {
+	// Stop reading and flood until evicted. Loopback socket buffers absorb
+	// megabytes, so no fixed event count is guaranteed to back up the write
+	// pump. Once they fill, the pump blocks, the 1-slot send buffer fills,
+	// and HandleEvent must evict synchronously.
+	const maxEvents = 1 << 16 // 256 MiB: far beyond any kernel socket buffering.
+	id := strings.Repeat("x", 4096)
+	sent := 0
+	for ; sent < maxEvents && srv.ClientCount() != 0; sent++ {
 		ev := monitor.Event{
-			Seq:  uint64(i + 1),
+			Seq:  uint64(sent + 1),
 			At:   time.Now(),
 			Type: monitor.EventDelta,
 			Updates: []session.SessionState{
-				{ID: string(bigPayload), Activity: session.ActivityWorking},
+				{ID: id, Activity: session.ActivityWorking},
 			},
 		}
 		_ = srv.HandleEvent(context.Background(), ev)
 	}
-
-	// Poll for eviction — either buffer-full or write-timeout path.
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if srv.ClientCount() == 0 {
-			_ = conn.CloseNow()
-			return
-		}
-		time.Sleep(20 * time.Millisecond)
+	if n := srv.ClientCount(); n != 0 {
+		t.Fatalf("expected 0 clients after %d events to a non-reading client, got %d", sent, n)
 	}
-	_ = conn.CloseNow()
-	t.Fatalf("expected 0 clients after slow-client eviction, got %d", srv.ClientCount())
 }
 
 func TestServer_LifecycleEvent(t *testing.T) {
