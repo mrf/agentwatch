@@ -1,8 +1,10 @@
 package wsapi
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"testing"
 	"time"
 )
@@ -110,24 +112,93 @@ func TestClientRateLimiter_Sweep(t *testing.T) {
 	}
 }
 
+func TestClientRateLimiter_MapSizeCapped(t *testing.T) {
+	limiter := newClientRateLimiter(1, time.Minute, 1)
+	limiter.maxClients = 3
+
+	base := time.Unix(100, 0)
+	limiter.now = func() time.Time { return base }
+
+	for i := 0; i < 10; i++ {
+		base = base.Add(time.Second)
+		limiter.Allow(fmt.Sprintf("client-%d", i))
+	}
+
+	limiter.mu.Lock()
+	n := len(limiter.clients)
+	_, newestKept := limiter.clients["client-9"]
+	_, oldestKept := limiter.clients["client-0"]
+	limiter.mu.Unlock()
+
+	if n != 3 {
+		t.Fatalf("bucket map size = %d, want 3", n)
+	}
+	if !newestKept {
+		t.Fatal("newest client should be tracked")
+	}
+	if oldestKept {
+		t.Fatal("least recently seen client should have been evicted")
+	}
+}
+
 func TestClientAddress(t *testing.T) {
+	trusted, err := parseTrustedProxies([]string{"10.0.0.0/8", "192.0.2.1"})
+	if err != nil {
+		t.Fatalf("parseTrustedProxies: %v", err)
+	}
+
 	tests := []struct {
 		name     string
+		trusted  []netip.Prefix
 		headers  map[string]string
 		remote   string
 		expected string
 	}{
 		{
-			name:     "x-forwarded-for takes first value",
-			headers:  map[string]string{"X-Forwarded-For": "198.51.100.7, 203.0.113.9"},
-			remote:   "127.0.0.1:1234",
+			name:     "untrusted remote ignores x-forwarded-for",
+			headers:  map[string]string{"X-Forwarded-For": "198.51.100.7"},
+			remote:   "203.0.113.5:1234",
+			expected: "203.0.113.5",
+		},
+		{
+			name:     "untrusted remote ignores x-real-ip",
+			headers:  map[string]string{"X-Real-IP": "198.51.100.7"},
+			remote:   "203.0.113.5:1234",
+			expected: "203.0.113.5",
+		},
+		{
+			name:     "no trusted proxies configured ignores headers",
+			headers:  map[string]string{"X-Forwarded-For": "198.51.100.7"},
+			remote:   "10.0.0.1:1234",
+			expected: "10.0.0.1",
+		},
+		{
+			name:     "trusted proxy honors x-forwarded-for",
+			trusted:  trusted,
+			headers:  map[string]string{"X-Forwarded-For": "198.51.100.7"},
+			remote:   "10.0.0.1:1234",
 			expected: "198.51.100.7",
 		},
 		{
-			name:     "x-real-ip fallback",
-			headers:  map[string]string{"X-Real-IP": "203.0.113.10"},
-			remote:   "127.0.0.1:1234",
-			expected: "203.0.113.10",
+			name:     "trusted proxy takes rightmost untrusted hop, not spoofable leftmost",
+			trusted:  trusted,
+			headers:  map[string]string{"X-Forwarded-For": "1.2.3.4, 198.51.100.7, 10.1.1.1"},
+			remote:   "192.0.2.1:1234",
+			expected: "198.51.100.7",
+		},
+		{
+			name:     "trusted proxy honors x-real-ip",
+			trusted:  trusted,
+			headers:  map[string]string{"X-Real-IP": "198.51.100.8"},
+			remote:   "10.0.0.1:1234",
+			expected: "198.51.100.8",
+		},
+		{
+			name:     "trusted proxy with malformed x-forwarded-for keys on remote",
+			trusted:  trusted,
+			headers:  map[string]string{"X-Forwarded-For": "not-an-ip"},
+			remote:   "10.0.0.1:1234",
+			expected: "10.0.0.1",
 		},
 		{
 			name:     "remote host without port fallback",
@@ -154,9 +225,15 @@ func TestClientAddress(t *testing.T) {
 				req.Header.Set(key, value)
 			}
 
-			if got := clientAddress(req); got != tt.expected {
+			if got := clientAddress(req, tt.trusted); got != tt.expected {
 				t.Fatalf("clientAddress() = %q, want %q", got, tt.expected)
 			}
 		})
+	}
+}
+
+func TestParseTrustedProxies_Invalid(t *testing.T) {
+	if _, err := parseTrustedProxies([]string{"not-a-proxy"}); err == nil {
+		t.Fatal("expected error for invalid trusted proxy entry")
 	}
 }
