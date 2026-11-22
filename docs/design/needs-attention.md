@@ -36,8 +36,8 @@ const (
 )
 ```
 
-- `SessionState.AttentionReason AttentionReason \`json:"attentionReason,omitempty"\``
-  and the same field on `source.SourceUpdate`.
+- `State.AttentionReason AttentionReason \`json:"attentionReason,omitempty"\``
+  and the same field on `source.Update`.
 - Unknown values round-trip as-is (same `UnmarshalJSON` pattern as `Activity`).
 - Invariant, enforced by the monitor: `AttentionReason != ""` iff
   `Activity == needs_attention && Lifecycle == active`.
@@ -181,7 +181,7 @@ permission-shaped in `sources/antigravity/testdata/*`. No evidence either way.
   an event type would need a §4.5 row for every activity edge.
 - Consumers detect the edge by comparing the previous `Activity`. `examples/notify` shows
   the pattern (keep last Activity per ID, act on `→ needs_attention`).
-- httpapi/wsapi: no code change; both serialize `SessionState`. Add JSON-shape tests that
+- httpapi/wsapi: no code change; both serialize `State`. Add JSON-shape tests that
   pin `attentionReason` present-when-set and omitted otherwise.
 
 ## 5. Test plan (tests first, all under `-race`)
@@ -208,7 +208,7 @@ Transports: one JSON-shape test each.
 
 ## 6. Implementation slicing
 
-1. **plan**: edit §4.4 (field + enum), §4.5 (two rows), §4.1 (`SourceUpdate` field).
+1. **plan**: edit §4.4 (field + enum), §4.5 (two rows), §4.1 (`Update` field).
    Doc-only.
 2. **session**: `ActivityNeedsAttention`, `AttentionReason` type/consts/field, JSON,
    privacy sentinel. Blocked by 1.

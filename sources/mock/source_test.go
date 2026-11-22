@@ -22,8 +22,8 @@ func handle(id string) source.SessionHandle {
 	}
 }
 
-func update(sessionID string, activity session.Activity) source.SourceUpdate {
-	return source.SourceUpdate{
+func update(sessionID string, activity session.Activity) source.Update {
+	return source.Update{
 		SessionID: sessionID,
 		Activity:  activity,
 	}
@@ -169,8 +169,8 @@ func TestParseScriptedResult(t *testing.T) {
 // TestParseMultipleScriptedResults verifies results are returned in order and exhausted.
 func TestParseMultipleScriptedResults(t *testing.T) {
 	h := handle("sess-1")
-	upd1 := source.SourceUpdate{SessionID: "sess-1", ContextTokens: 100}
-	upd2 := source.SourceUpdate{SessionID: "sess-1", ContextTokens: 200}
+	upd1 := source.Update{SessionID: "sess-1", ContextTokens: 100}
+	upd2 := source.Update{SessionID: "sess-1", ContextTokens: 200}
 
 	s := mock.New(
 		mock.WithParseResult("sess-1", upd1, source.Cursor("c1"), nil),
@@ -197,7 +197,7 @@ func TestParseMultipleScriptedResults(t *testing.T) {
 func TestParseErrorInjection(t *testing.T) {
 	sentinel := errors.New("parse failed")
 	h := handle("sess-1")
-	s := mock.New(mock.WithParseResult("sess-1", source.SourceUpdate{}, "", sentinel))
+	s := mock.New(mock.WithParseResult("sess-1", source.Update{}, "", sentinel))
 
 	_, _, err := s.Parse(context.Background(), h, source.Cursor(""))
 	if !errors.Is(err, sentinel) {
@@ -232,7 +232,7 @@ func TestParseCallRecording(t *testing.T) {
 // TestParseDefaultFallback verifies that the default parse result is used when queue is empty.
 func TestParseDefaultFallback(t *testing.T) {
 	h := handle("sess-1")
-	defaultUpd := source.SourceUpdate{SessionID: "sess-1", ContextTokens: 999}
+	defaultUpd := source.Update{SessionID: "sess-1", ContextTokens: 999}
 	s := mock.New(mock.WithDefaultParse(defaultUpd, source.Cursor("default"), nil))
 
 	// No scripted result for sess-1 — should fall back to default.
@@ -257,8 +257,8 @@ func TestParseDefaultFallback(t *testing.T) {
 // TestDefaultFallbackAfterQueueExhausted verifies the default is used after scripted queue empties.
 func TestDefaultFallbackAfterQueueExhausted(t *testing.T) {
 	h := handle("sess-1")
-	scripted := source.SourceUpdate{SessionID: "sess-1", ContextTokens: 1}
-	dflt := source.SourceUpdate{SessionID: "sess-1", ContextTokens: 2}
+	scripted := source.Update{SessionID: "sess-1", ContextTokens: 1}
+	dflt := source.Update{SessionID: "sess-1", ContextTokens: 2}
 
 	s := mock.New(
 		mock.WithParseResult("sess-1", scripted, source.Cursor("c1"), nil),
@@ -295,7 +295,7 @@ func TestQueueHandles(t *testing.T) {
 func TestQueueParseResult(t *testing.T) {
 	s := mock.New()
 	h := handle("sess-1")
-	upd := source.SourceUpdate{SessionID: "sess-1", ContextTokens: 77}
+	upd := source.Update{SessionID: "sess-1", ContextTokens: 77}
 	s.QueueParseResult("sess-1", upd, source.Cursor("c77"), nil)
 
 	got, _, err := s.Parse(context.Background(), h, source.Cursor(""))
@@ -317,7 +317,7 @@ func TestConcurrentAccess(t *testing.T) {
 	h := handle("sess-1")
 	s := mock.New(
 		mock.WithHandles(h),
-		mock.WithParseResult("sess-1", source.SourceUpdate{SessionID: "sess-1"}, source.Cursor("c1"), nil),
+		mock.WithParseResult("sess-1", source.Update{SessionID: "sess-1"}, source.Cursor("c1"), nil),
 	)
 
 	ctx := context.Background()

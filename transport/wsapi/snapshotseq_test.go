@@ -26,7 +26,7 @@ func newSinkedServer(t *testing.T) (*wsapi.Server, *httptest.Server, uint64) {
 	t.Helper()
 	src := mock.New(mock.WithName("test-source"))
 	src.SetHandles([]source.SessionHandle{{ID: "sess-1", Source: "test-source"}})
-	src.AddUpdate("sess-1", source.SourceUpdate{SessionID: "sess-1", Activity: session.ActivityWorking}, "c1")
+	src.AddUpdate("sess-1", source.Update{SessionID: "sess-1", Activity: session.ActivityWorking}, "c1")
 
 	fwd := &forwardSink{}
 	mon, err := monitor.New(monitor.WithSources(src), monitor.WithSink(fwd))
@@ -78,7 +78,7 @@ func TestServer_DeltaDuringConnectArrivesAfterSnapshot(t *testing.T) {
 			Seq:     deltaSeq,
 			At:      time.Now(),
 			Type:    monitor.EventDelta,
-			Updates: []session.SessionState{{ID: "sess-1", Activity: session.ActivityIdle}},
+			Updates: []session.State{{ID: "sess-1", Activity: session.ActivityIdle}},
 		})
 		if err != nil {
 			t.Errorf("HandleEvent: %v", err)

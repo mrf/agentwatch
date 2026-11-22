@@ -48,14 +48,14 @@ func TestActivity_UnmarshalBadType(t *testing.T) {
 	}
 }
 
-// --- SessionState clone independence ---
+// --- State clone independence ---
 
 func TestSessionState_CloneIndependence(t *testing.T) {
 	t.Parallel()
 
 	now := time.Now()
 	completed := now.Add(time.Hour)
-	original := session.SessionState{
+	original := session.State{
 		ID:          "sess-1",
 		Source:      "claude",
 		Activity:    session.ActivityWorking,
@@ -95,7 +95,7 @@ func TestSessionState_CloneIndependence(t *testing.T) {
 
 func TestSessionState_CloneNilCompletedAt(t *testing.T) {
 	t.Parallel()
-	s := session.SessionState{ID: "x"}
+	s := session.State{ID: "x"}
 	c := s.Clone()
 	if c.CompletedAt != nil {
 		t.Error("clone.CompletedAt should be nil when original is nil")
@@ -104,7 +104,7 @@ func TestSessionState_CloneNilCompletedAt(t *testing.T) {
 
 func TestSessionState_CloneEmptySubagents(t *testing.T) {
 	t.Parallel()
-	s := session.SessionState{Subagents: nil}
+	s := session.State{Subagents: nil}
 	c := s.Clone()
 	if c.Subagents != nil {
 		t.Error("clone.Subagents should be nil when original is nil")

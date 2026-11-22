@@ -30,7 +30,7 @@ to working directories. This is source-private and Linux-only.
 
 ### Design constraints from the plan
 
-- No PID or TmuxTarget in `session.SessionState` (§4.4, §12.4).
+- No PID or TmuxTarget in `session.State` (§4.4, §12.4).
 - No game/UI concepts in core packages (§12.1).
 - No global registration as the primary API (§12.11).
 - Public packages are stable extension points; implementation starts internal
@@ -181,7 +181,7 @@ func WithTmuxBinary(path string) Option
 
 Process and tmux data flows to consumers through a **decorator EventSink**
 that enriches monitor events with process metadata, rather than adding fields
-to `session.SessionState`. This preserves the plan's hard rule against PID
+to `session.State`. This preserves the plan's hard rule against PID
 and TmuxTarget in core state.
 
 ```go
@@ -230,13 +230,13 @@ func WithTmuxResolver(r *tmux.Resolver) EnrichmentOption
 // Default: match by working directory.
 func WithMatchStrategy(s MatchStrategy) EnrichmentOption
 
-// MatchStrategy determines how a session.SessionState is matched to a
+// MatchStrategy determines how a session.State is matched to a
 // running process.
 type MatchStrategy int
 
 const (
     // MatchByWorkingDir matches sessions to processes by comparing
-    // SessionState.WorkingDir to Info.WorkingDir.
+    // State.WorkingDir to Info.WorkingDir.
     MatchByWorkingDir MatchStrategy = iota
 
     // MatchBySessionID matches sessions to processes by looking for the
@@ -281,7 +281,7 @@ A `monitor.WithProcessAwareness()` option was considered. This was rejected
 because:
 
 - It would couple the monitor to OS-level dependencies.
-- It would require adding process fields to `session.SessionState` or a
+- It would require adding process fields to `session.State` or a
   parallel state map inside the monitor, violating §4.4 and §12.4.
 - The sink pattern is more composable: consumers can choose which events to
   enrich, rate-limit scanning, or cache results.

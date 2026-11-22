@@ -28,17 +28,17 @@ func TestRace_ConcurrentSnapshotDuringPollOnce(t *testing.T) {
 
 	const iterations = 50
 	for i := 0; i < iterations; i++ {
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID:         "s1",
 			Activity:          session.ActivityWorking,
 			MessageCountDelta: 1,
 		}, source.Cursor(fmt.Sprintf("c1-%d", i)))
-		src.AddUpdate("s2", source.SourceUpdate{
+		src.AddUpdate("s2", source.Update{
 			SessionID:          "s2",
 			Activity:           session.ActivityIdle,
 			ToolCallCountDelta: 1,
 		}, source.Cursor(fmt.Sprintf("c2-%d", i)))
-		src.AddUpdate("s3", source.SourceUpdate{
+		src.AddUpdate("s3", source.Update{
 			SessionID:     "s3",
 			Activity:      session.ActivityWorking,
 			ContextTokens: i * 100,
@@ -102,7 +102,7 @@ func TestRace_ConcurrentSnapshotDuringRepeatedPolling(t *testing.T) {
 
 	const iterations = 100
 	for i := 0; i < iterations; i++ {
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID:         "s1",
 			Activity:          session.ActivityWorking,
 			MessageCountDelta: 1,
@@ -168,7 +168,7 @@ func TestRace_ConcurrentPollOnce(t *testing.T) {
 	const goroutines = 10
 	const pollsPerGoroutine = 20
 	for i := 0; i < goroutines*pollsPerGoroutine; i++ {
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID:         "s1",
 			Activity:          session.ActivityWorking,
 			MessageCountDelta: 1,
@@ -221,12 +221,12 @@ func TestRace_SinkDeliveryOutsideStoreLock(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 		{ID: "s2", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus",
 	}, "c1")
-	src.AddUpdate("s2", source.SourceUpdate{
+	src.AddUpdate("s2", source.Update{
 		SessionID: "s2",
 		Activity:  session.ActivityIdle,
 		Model:     "sonnet",
@@ -290,7 +290,7 @@ func TestRace_SlowSinkDoesNotBlockSnapshot(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -332,7 +332,7 @@ func TestRace_SlowSinkDoesNotBlockSnapshot(t *testing.T) {
 
 	// Snapshot must complete even though the sink is blocked.
 	// If the lock were held during delivery, this would deadlock.
-	snapshotDone := make(chan []session.SessionState, 1)
+	snapshotDone := make(chan []session.State, 1)
 	go func() {
 		snapshotDone <- mon.Snapshot()
 	}()
@@ -375,7 +375,7 @@ func TestRace_ConcurrentHealthSnapshotPollOnce(t *testing.T) {
 
 	const iterations = 100
 	for i := 0; i < iterations; i++ {
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID:         "s1",
 			Activity:          session.ActivityWorking,
 			MessageCountDelta: 1,

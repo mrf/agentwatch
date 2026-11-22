@@ -33,14 +33,14 @@ import (
 // sessionIDPattern matches the canonical UUID stem of a conversation file.
 var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
 
-// Option configures an AntigravitySource.
-type Option func(*AntigravitySource)
+// Option configures a Source.
+type Option func(*Source)
 
 // WithRoot sets the agy conversations directory. Discover walks it for
 // <uuid>.db files, treating each as a session keyed by the UUID. Other files
 // are ignored. If root is empty, Discover returns no sessions.
 func WithRoot(path string) Option {
-	return func(s *AntigravitySource) {
+	return func(s *Source) {
 		s.root = path
 	}
 }
@@ -49,24 +49,24 @@ func WithRoot(path string) Option {
 // the current time, counting writes still pending in the WAL. Zero disables
 // age filtering.
 func WithDiscoverWindow(d time.Duration) Option {
-	return func(s *AntigravitySource) {
+	return func(s *Source) {
 		s.window = d
 	}
 }
 
-// AntigravitySource discovers and parses agy conversation databases.
+// Source discovers and parses agy conversation databases.
 // The zero value is usable but discovers no sessions until configured with
 // a non-empty root via WithRoot.
-type AntigravitySource struct {
+type Source struct {
 	root   string
 	window time.Duration
 	walker *filewatch.Walker
 	now    func() time.Time
 }
 
-// New returns a new AntigravitySource configured by opts.
+// New returns a new Source configured by opts.
 func New(opts ...Option) (source.Source, error) {
-	s := &AntigravitySource{now: time.Now}
+	s := &Source{now: time.Now}
 	for i := 0; i < len(opts); i++ {
 		opts[i](s)
 	}
@@ -76,7 +76,7 @@ func New(opts ...Option) (source.Source, error) {
 	return s, nil
 }
 
-// Register adds an AntigravitySource constructor to r under the name "antigravity".
+// Register adds a Source constructor to r under the name "antigravity".
 func Register(r *source.Registry, opts ...Option) error {
 	return r.Register("antigravity", func() (source.Source, error) {
 		return New(opts...)
@@ -84,12 +84,12 @@ func Register(r *source.Registry, opts ...Option) error {
 }
 
 // Name returns "antigravity".
-func (s *AntigravitySource) Name() string { return "antigravity" }
+func (s *Source) Name() string { return "antigravity" }
 
 // Discover scans the configured root for <uuid>.db conversation files. The
 // session ID is the UUID; WorkingDir is reported by Parse from the
 // conversation's own metadata.
-func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandle, error) {
+func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	if s.walker == nil {
 		return nil, nil
 	}
@@ -131,31 +131,31 @@ func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandl
 	return handles, nil
 }
 
-// Parse reads the conversation database and returns a SourceUpdate.
+// Parse reads the conversation database and returns an Update.
 //
 // If neither the database nor its WAL has changed since the cursor was
 // taken, no data is returned. Otherwise the conversation is re-read and the
 // message and tool-call deltas are computed against the cursor's totals.
-func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	if ctx.Err() != nil {
-		return source.SourceUpdate{}, c, ctx.Err()
+		return source.Update{}, c, ctx.Err()
 	}
 
 	fp, err := statFingerprint(h.Path)
 	if err != nil {
-		return source.SourceUpdate{}, c, err
+		return source.Update{}, c, err
 	}
 	prev, prevMsgs, prevTools, ok := decodeCursor(c)
 	if ok && prev == fp {
-		return source.SourceUpdate{}, c, nil
+		return source.Update{}, c, nil
 	}
 
 	r, err := readFile(ctx, h.Path)
 	if err != nil {
 		if ctx.Err() != nil {
-			return source.SourceUpdate{}, c, err
+			return source.Update{}, c, err
 		}
-		return source.SourceUpdate{}, readFailedCursor(c, ok, fp, prevMsgs, prevTools),
+		return source.Update{}, readFailedCursor(c, ok, fp, prevMsgs, prevTools),
 			fmt.Errorf("antigravity: read %s: %w", filepath.Base(h.Path), err)
 	}
 

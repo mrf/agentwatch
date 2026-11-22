@@ -13,7 +13,7 @@ import (
 
 // pollTokens runs one PollOnce per update against a single session and
 // returns the session state after the last poll.
-func pollTokens(t *testing.T, updates ...source.SourceUpdate) session.SessionState {
+func pollTokens(t *testing.T, updates ...source.Update) session.State {
 	t.Helper()
 	clk := testClock()
 	src := mock.New(mock.WithName("test"))
@@ -42,8 +42,8 @@ func pollTokens(t *testing.T, updates ...source.SourceUpdate) session.SessionSta
 func TestApplyUpdate_TokensKeptWhenBatchHasNone(t *testing.T) {
 	t.Parallel()
 	s := pollTokens(t,
-		source.SourceUpdate{HasTokens: true, ContextTokens: 5000, OutputTokens: 40, MaxContextTokens: 10000, TokenEstimated: true, MessageCountDelta: 1},
-		source.SourceUpdate{MessageCountDelta: 1},
+		source.Update{HasTokens: true, ContextTokens: 5000, OutputTokens: 40, MaxContextTokens: 10000, TokenEstimated: true, MessageCountDelta: 1},
+		source.Update{MessageCountDelta: 1},
 	)
 	if s.ContextTokens != 5000 || s.OutputTokens != 40 || !s.TokenEstimated {
 		t.Errorf("tokens = ctx %d out %d est %v, want 5000/40/true", s.ContextTokens, s.OutputTokens, s.TokenEstimated)
@@ -56,8 +56,8 @@ func TestApplyUpdate_TokensKeptWhenBatchHasNone(t *testing.T) {
 func TestApplyUpdate_HasTokensZeroOverwrites(t *testing.T) {
 	t.Parallel()
 	s := pollTokens(t,
-		source.SourceUpdate{HasTokens: true, ContextTokens: 5000, OutputTokens: 40},
-		source.SourceUpdate{HasTokens: true},
+		source.Update{HasTokens: true, ContextTokens: 5000, OutputTokens: 40},
+		source.Update{HasTokens: true},
 	)
 	if s.ContextTokens != 0 || s.OutputTokens != 0 {
 		t.Errorf("tokens = ctx %d out %d, want 0/0 (explicit report of zero)", s.ContextTokens, s.OutputTokens)
@@ -66,7 +66,7 @@ func TestApplyUpdate_HasTokensZeroOverwrites(t *testing.T) {
 
 func TestApplyUpdate_NonZeroTokensWithoutFlagStillApply(t *testing.T) {
 	t.Parallel()
-	s := pollTokens(t, source.SourceUpdate{ContextTokens: 700, OutputTokens: 9})
+	s := pollTokens(t, source.Update{ContextTokens: 700, OutputTokens: 9})
 	if s.ContextTokens != 700 || s.OutputTokens != 9 {
 		t.Errorf("tokens = ctx %d out %d, want 700/9", s.ContextTokens, s.OutputTokens)
 	}

@@ -21,7 +21,7 @@ func TestTerminalUpdateOnTerminalSession_DoesNotResume(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -51,7 +51,7 @@ func TestTerminalUpdateOnTerminalSession_DoesNotResume(t *testing.T) {
 		t.Fatalf("expected 1 stale-terminal session, got %v", before)
 	}
 
-	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Terminal: true}, "c2")
+	src.AddUpdate("s1", source.Update{SessionID: "s1", Terminal: true}, "c2")
 	sink.events = nil
 	if err := m.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce 3: %v", err)

@@ -50,8 +50,8 @@ func TestPollOnce_ChurnKeepsBookkeepingBounded(t *testing.T) {
 	for i := 0; i < sessions; i++ {
 		id := fmt.Sprintf("s%d", i)
 		src.SetHandles([]source.SessionHandle{{ID: id, Source: "test"}})
-		src.QueueParseResult(id, source.SourceUpdate{SessionID: id, MessageCountDelta: 1}, "c1", nil)
-		src.QueueParseResult(id, source.SourceUpdate{SessionID: id, Terminal: true}, "c2", nil)
+		src.QueueParseResult(id, source.Update{SessionID: id, MessageCountDelta: 1}, "c1", nil)
+		src.QueueParseResult(id, source.Update{SessionID: id, Terminal: true}, "c2", nil)
 
 		poll() // discovered
 		poll() // terminal
@@ -75,8 +75,8 @@ func TestPollOnce_ChurnKeepsBookkeepingBounded(t *testing.T) {
 func removeAndForget(t *testing.T, src *mock.Source, poll func()) {
 	t.Helper()
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
-	src.QueueParseResult("s1", source.SourceUpdate{SessionID: "s1", MessageCountDelta: 3}, "c1", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{SessionID: "s1", Terminal: true}, "c2", nil)
+	src.QueueParseResult("s1", source.Update{SessionID: "s1", MessageCountDelta: 3}, "c1", nil)
+	src.QueueParseResult("s1", source.Update{SessionID: "s1", Terminal: true}, "c2", nil)
 	poll()
 	poll()
 	poll()
@@ -101,7 +101,7 @@ func TestPollOnce_ForgottenSessionReappearsWithoutDoubleCounting(t *testing.T) {
 	before := src.ParseCallCount()
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
 	// Full re-read from a zero cursor: the 3 old messages plus 1 new one.
-	src.QueueParseResult("s1", source.SourceUpdate{SessionID: "s1", MessageCountDelta: 4}, "c3", nil)
+	src.QueueParseResult("s1", source.Update{SessionID: "s1", MessageCountDelta: 4}, "c3", nil)
 	poll()
 
 	calls := src.ParseCalls()[before:]
@@ -131,8 +131,8 @@ func TestPollOnce_DiscoverFailureKeepsCursors(t *testing.T) {
 	m, poll := newBoundedMonitor(t, src, &recordingSink{})
 
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
-	src.QueueParseResult("s1", source.SourceUpdate{SessionID: "s1", MessageCountDelta: 3}, "c1", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{SessionID: "s1", Terminal: true}, "c2", nil)
+	src.QueueParseResult("s1", source.Update{SessionID: "s1", MessageCountDelta: 3}, "c1", nil)
+	src.QueueParseResult("s1", source.Update{SessionID: "s1", Terminal: true}, "c2", nil)
 	poll()
 	poll()
 	poll()
@@ -161,7 +161,7 @@ func TestPollOnce_StoredSessionKeepsCursorWhenUndiscovered(t *testing.T) {
 	m, poll := newBoundedMonitor(t, src, &recordingSink{})
 
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
-	src.QueueParseResult("s1", source.SourceUpdate{SessionID: "s1", MessageCountDelta: 3}, "c1", nil)
+	src.QueueParseResult("s1", source.Update{SessionID: "s1", MessageCountDelta: 3}, "c1", nil)
 	poll()
 	src.SetHandles(nil)
 	poll()

@@ -196,12 +196,12 @@ func fileURIPath(uri string) string {
 	return u.Path
 }
 
-// buildUpdate converts a parseResult plus cursor deltas into a SourceUpdate.
-func buildUpdate(r parseResult, id, workingDir string, msgDelta, toolDelta int) source.SourceUpdate {
+// buildUpdate converts a parseResult plus cursor deltas into an Update.
+func buildUpdate(r parseResult, id, workingDir string, msgDelta, toolDelta int) source.Update {
 	if r.workingDir != "" {
 		workingDir = r.workingDir
 	}
-	return source.SourceUpdate{
+	return source.Update{
 		SessionID:          id,
 		Activity:           r.activity,
 		Model:              r.model,

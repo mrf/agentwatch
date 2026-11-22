@@ -140,7 +140,7 @@ type Cursor string
 type Source interface {
     Name() string
     Discover(ctx context.Context) ([]SessionHandle, error)
-    Parse(ctx context.Context, h SessionHandle, c Cursor) (SourceUpdate, Cursor, error)
+    Parse(ctx context.Context, h SessionHandle, c Cursor) (Update, Cursor, error)
 }
 
 type SessionHandle struct {
@@ -151,7 +151,7 @@ type SessionHandle struct {
     Source     string
 }
 
-type SourceUpdate struct {
+type Update struct {
     SessionID string
     Slug      string
 
@@ -185,7 +185,7 @@ Rules:
 
 - The monitor treats `Cursor` as opaque. It stores and returns it to the source but never parses or compares it.
 - File-tail sources may encode byte offsets as decimal strings. The JSONL sources encode a `jsonl.Position` (offset plus device/inode where available and a hash of the file's leading bytes) so a truncated, rewritten or replaced file is detected rather than read from past EOF or mid-line.
-- When a source has to start over (its file was truncated or replaced, or its cursor is unreadable), it re-reads from the beginning and sets `SourceUpdate.Reset`. The count deltas in that update are absolute and replace the session's counts, and its `Subagents` replaces the subagent list, so a re-read never double-counts.
+- When a source has to start over (its file was truncated or replaced, or its cursor is unreadable), it re-reads from the beginning and sets `Update.Reset`. The count deltas in that update are absolute and replace the session's counts, and its `Subagents` replaces the subagent list, so a re-read never double-counts.
 - Rewrite-on-save sources may encode mtimes, hashes, or source-specific JSON.
 - Source-specific continuity, such as Claude subagent parent maps, belongs inside the source or cursor. It should not leak into `SessionHandle`.
 - `context.Context` is required on blocking methods.
@@ -230,8 +230,8 @@ func New(opts ...Option) (*Monitor, error)
 
 func (m *Monitor) Run(ctx context.Context) error
 func (m *Monitor) PollOnce(ctx context.Context) error
-func (m *Monitor) Snapshot() []session.SessionState
-func (m *Monitor) SnapshotWithSeq() ([]session.SessionState, uint64)
+func (m *Monitor) Snapshot() []session.State
+func (m *Monitor) SnapshotWithSeq() ([]session.State, uint64)
 func (m *Monitor) Health() []Health
 
 func WithSources(sources ...source.Source) Option
@@ -257,7 +257,7 @@ Rules:
 ```go
 package session
 
-type SessionState struct {
+type State struct {
     ID     string `json:"id"`
     Source string `json:"source"`
     Slug   string `json:"slug,omitempty"`
@@ -369,8 +369,8 @@ type Event struct {
     At  time.Time `json:"at"`
     Type EventType `json:"type"`
 
-    Sessions []session.SessionState `json:"sessions,omitempty"`
-    Updates  []session.SessionState `json:"updates,omitempty"`
+    Sessions []session.State `json:"sessions,omitempty"`
+    Updates  []session.State `json:"updates,omitempty"`
     Removed  []string               `json:"removed,omitempty"`
 
     Lifecycle *session.LifecycleEvent `json:"lifecycle,omitempty"`
@@ -477,7 +477,7 @@ Do not merge the source branch into the new repo. Use `git show <sha>:<path>` or
 | agent-racer artifact | Why rewrite | Replacement |
 |---|---|---|
 | `backend/internal/monitor/monitor.go` | Monolithic orchestration mixed with racer state, process awareness, tmux, broadcasting, token math, and Claude end markers | New monitor built around source cursor, store, lifecycle table, and event envelope |
-| `SessionState` | Mixes generic state with racer UI, process, tmux, and preview fields | Slim public state in `session` |
+| `State` | Mixes generic state with racer UI, process, tmux, and preview fields | Slim public state in `session` |
 | `session.Store` file as-is | Currently assigns `Lane` | Preserve clone/concurrency behavior, remove racer fields |
 | `backend/internal/ws/server.go` | Imports app concerns and game logic | `transport/wsapi` adapter driven only by monitor events |
 | `backend/internal/ws/broadcast.go` | Couples broadcaster to store and racer event types | EventSink-driven broadcaster |
@@ -502,7 +502,7 @@ Claude-specific pieces stay under `sources/claude` or source-private internals:
 - Claude project path encoding/decoding.
 - Claude session-end marker parsing and validation.
 
-The core monitor should not know that Claude writes hook marker files. It should only see `SourceUpdate{Terminal: true, EndReason: ...}`.
+The core monitor should not know that Claude writes hook marker files. It should only see `Update{Terminal: true, EndReason: ...}`.
 
 Claude-specific options include:
 
@@ -616,7 +616,7 @@ Exit criteria: the first implementation issue has a pinned source SHA and agreed
 Goal: prove the abstraction before porting everything.
 
 - [ ] Initialize repo, `go.mod`, license, minimal README.
-- [ ] Implement `session.Activity`, slim `SessionState`, clone methods.
+- [ ] Implement `session.Activity`, slim `State`, clone methods.
 - [ ] Implement `source.Source` with opaque cursor.
 - [ ] Implement a tiny private store with lock-release-before-callback behavior.
 - [ ] Implement `monitor.New`, `PollOnce`, `Snapshot`, and one event sink path.

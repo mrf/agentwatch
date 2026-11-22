@@ -6,8 +6,8 @@
 github.com/mrf/agentwatch/
 │
 ├── monitor/          PUBLIC  — orchestration: poll, state store, event delivery
-├── session/          PUBLIC  — state model: SessionState, Activity, LifecycleState, Policy
-├── source/           PUBLIC  — source contract: Source interface, SessionHandle, SourceUpdate, Cursor
+├── session/          PUBLIC  — state model: State, Activity, LifecycleState, Policy
+├── source/           PUBLIC  — source contract: Source interface, SessionHandle, Update, Cursor
 │
 ├── sources/
 │   ├── claude/       PUBLIC  — Claude Code source (JSONL session files)
@@ -38,12 +38,12 @@ github.com/mrf/agentwatch/
 ```
 Sources (Discover + Parse)
         │
-        │  SessionHandle + SourceUpdate
+        │  SessionHandle + Update
         ▼
    Monitor.PollOnce
         │
-        ├── state store (map[id]SessionState, guarded by sync.Mutex)
-        │       • applyUpdate merges SourceUpdate → SessionState
+        ├── state store (map[id]State, guarded by sync.Mutex)
+        │       • applyUpdate merges Update → State
         │       • lifecycle transitions fire before event delivery
         │       • stale sweep: active sessions silent > threshold → terminal
         │       • retention sweep: terminal sessions past window → removed
@@ -54,7 +54,7 @@ Sources (Discover + Parse)
                 ├── EventLifecycle — single lifecycle transition
                 └── EventHealth   — source health status change
 
-   Monitor.Snapshot()  →  []SessionState  (pull path, any time)
+   Monitor.Snapshot()  →  []State  (pull path, any time)
 ```
 
 ### Sequencing guarantees
@@ -75,8 +75,8 @@ type Event struct {
     Seq      uint64                   // monotonically increasing
     At       time.Time
     Type     EventType                // snapshot | delta | lifecycle | health
-    Sessions []session.SessionState   // full snapshot (EventSnapshot only)
-    Updates  []session.SessionState   // changed sessions (EventDelta)
+    Sessions []session.State   // full snapshot (EventSnapshot only)
+    Updates  []session.State   // changed sessions (EventDelta)
     Removed  []string                 // removed session IDs (EventDelta)
     Lifecycle *session.LifecycleEvent // single transition (EventLifecycle)
     Health   *Health                  // source health change (EventHealth)
@@ -123,7 +123,7 @@ type LifecycleEvent struct {
 |---------|------|----|------------|
 | First parse result | — | active | `discovered` |
 | New data | active | active | `updated` |
-| `SourceUpdate.Terminal = true` | active | terminal | `terminal` |
+| `Update.Terminal = true` | active | terminal | `terminal` |
 | No data past stale threshold | active | terminal | `stale` |
 | New data after terminal | terminal | active | `resumed` |
 | Retention window expires | terminal | — | `removed` |

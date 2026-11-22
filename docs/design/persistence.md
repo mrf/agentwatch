@@ -97,12 +97,12 @@ Monitor state (`monitor.go` `Monitor` struct): `store`, `cursors`, `removed`,
 | Item | Persist? | Why |
 |---|---|---|
 | `cursors[source:id]` for sessions in `store` or `removed` | **yes**, verbatim | stored opaque, never parsed (rule 5) |
-| `store[id]` (`session.SessionState`, deep clone) | **yes**, with its cursor | needed for correct deltas (row C). It is already the public, rule-3-clean state |
+| `store[id]` (`session.State`, deep clone) | **yes**, with its cursor | needed for correct deltas (row C). It is already the public, rule-3-clean state |
 | `contentStart[id]` | yes (bool per session) | `mergeStartedAt` needs it, or a restored content start is overwritten |
 | `removed[id]` | yes, bounded (§5.4) | without it, removed sessions come back as `discovered` |
 | cursors with no store/removed entry (zero-update-only handles) | **no** | restoring them is row C. Dropping them re-reads from 0, which is today's safe behaviour, and bounds the file |
 | `health`, `seq` | no | runtime only. Document that `SkippedLines` counts since process start once restore is used |
-| anything inside a source (`ClaudeSource.pendingTerminals`, `lastMarkerScan`, opencode's DB handle) | no | source-private. ADR 0003 already says continuity state belongs in the cursor |
+| anything inside a source (`Source.pendingTerminals`, `lastMarkerScan`, opencode's DB handle) | no | source-private. ADR 0003 already says continuity state belongs in the cursor |
 
 **Privacy audit of current cursor contents (rule 3).** None of the six sources encode text
 or paths:
@@ -236,7 +236,7 @@ the row-D finding are the same gap.
 
 - fsnotify: no conflict. It never touches cursors, and the first poll is a full `Discover`
   either way.
-- needs-attention: any new `SessionState` field is saved automatically, but adding one
+- needs-attention: any new `State` field is saved automatically, but adding one
   changes the encoding. Bump `version` only for semantic changes; JSON already ignores
   unknown fields and zero-fills missing ones.
 - cmd-binary: it lists persistence as a non-goal (§"Non-goals"). This doc would make

@@ -30,7 +30,7 @@ func buildMonitor(t *testing.T) (*monitor.Monitor, string) {
 			Source:    "mock",
 			StartedAt: time.Now(),
 		}),
-		mock.WithParseResult(sessionID, source.SourceUpdate{
+		mock.WithParseResult(sessionID, source.Update{
 			SessionID:  sessionID,
 			Activity:   session.ActivityWorking,
 			Model:      "test-model",
@@ -65,7 +65,7 @@ func TestHandler_ListSessions(t *testing.T) {
 	}
 	assertContentTypeJSON(t, w)
 
-	var states []session.SessionState
+	var states []session.State
 	if err := json.NewDecoder(w.Body).Decode(&states); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestHandler_GetSession(t *testing.T) {
 	}
 	assertContentTypeJSON(t, w)
 
-	var s session.SessionState
+	var s session.State
 	if err := json.NewDecoder(w.Body).Decode(&s); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -123,7 +123,7 @@ func TestHandler_Pseudonymize_ListThenGet(t *testing.T) {
 	if strings.Contains(w.Body.String(), id) {
 		t.Fatalf("list leaks real ID: %s", w.Body.String())
 	}
-	var states []session.SessionState
+	var states []session.State
 	if err := json.NewDecoder(w.Body).Decode(&states); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -139,7 +139,7 @@ func TestHandler_Pseudonymize_ListThenGet(t *testing.T) {
 	if strings.Contains(w.Body.String(), id) {
 		t.Fatalf("get leaks real ID: %s", w.Body.String())
 	}
-	var s session.SessionState
+	var s session.State
 	if err := json.NewDecoder(w.Body).Decode(&s); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -390,7 +390,7 @@ func TestHandler_PrivacyFilter_RedactsFields(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
-	var states []session.SessionState
+	var states []session.State
 	if err := json.NewDecoder(w.Body).Decode(&states); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -413,7 +413,7 @@ func TestHandler_PrivacyFilter_RedactsFields(t *testing.T) {
 	w2 := httptest.NewRecorder()
 	h.ServeHTTP(w2, r2)
 
-	var s2 session.SessionState
+	var s2 session.State
 	if err := json.NewDecoder(w2.Body).Decode(&s2); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
@@ -433,7 +433,7 @@ func TestHandler_PrivacyFilter_PassthroughByDefault(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
 
-	var s session.SessionState
+	var s session.State
 	if err := json.NewDecoder(w.Body).Decode(&s); err != nil {
 		t.Fatalf("decode: %v", err)
 	}

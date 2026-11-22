@@ -8,11 +8,11 @@ import (
 	"github.com/mrf/agentwatch/session"
 )
 
-// fullState returns a SessionState with every field populated.
-func fullState() session.SessionState {
+// fullState returns a State with every field populated.
+func fullState() session.State {
 	now := time.Now().UTC()
 	completed := now.Add(time.Hour)
-	return session.SessionState{
+	return session.State{
 		ID:                 "sess-abc",
 		Source:             "claude",
 		Slug:               "my-feature",
@@ -308,7 +308,7 @@ func TestPolicy_Apply_DoesNotMutateOriginal(t *testing.T) {
 
 func TestPolicy_Apply_NilSubagents(t *testing.T) {
 	t.Parallel()
-	s := session.SessionState{
+	s := session.State{
 		ID:         "sess-1",
 		WorkingDir: "/secret",
 		Branch:     "main",
@@ -328,7 +328,7 @@ func TestPolicy_Apply_NilSubagents(t *testing.T) {
 
 // --- Field coverage sentinel ---
 //
-// This test enumerates the exported fields of SessionState and SubagentState
+// This test enumerates the exported fields of State and SubagentState
 // using reflection and verifies that each is explicitly listed in the
 // privacyReviewedFields set below. If a new field is added to either struct
 // without updating this set, the test fails, forcing a privacy review of the
@@ -340,7 +340,7 @@ func TestPolicy_Apply_NilSubagents(t *testing.T) {
 func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 	t.Parallel()
 
-	// All exported fields of SessionState reviewed for privacy sensitivity.
+	// All exported fields of State reviewed for privacy sensitivity.
 	// Mark sensitive fields with (*).
 	sessionStateReviewed := map[string]bool{
 		"ID":                 true, // (*) session identifier — RedactSessionID
@@ -375,7 +375,7 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 		"CurrentTool":    true, // not sensitive
 		"StartedAt":      true, // not sensitive
 		"LastActivityAt": true, // not sensitive
-		"Model":          true, // (*) model name — RedactModel (same sensitivity as SessionState.Model)
+		"Model":          true, // (*) model name — RedactModel (same sensitivity as State.Model)
 		"ContextTokens":  true, // not sensitive
 		"OutputTokens":   true, // not sensitive
 		"MessageCount":   true, // not sensitive
@@ -396,6 +396,6 @@ func TestPrivacyFilter_FieldCoverage(t *testing.T) {
 		}
 	}
 
-	checkStruct(t, reflect.TypeFor[session.SessionState](), sessionStateReviewed)
+	checkStruct(t, reflect.TypeFor[session.State](), sessionStateReviewed)
 	checkStruct(t, reflect.TypeFor[session.SubagentState](), subagentStateReviewed)
 }

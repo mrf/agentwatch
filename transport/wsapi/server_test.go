@@ -46,7 +46,7 @@ func newTestServer(t *testing.T, sessions []testSession, opts ...wsapi.Option) (
 
 	// Queue parse results so PollOnce produces real state.
 	for i := 0; i < len(sessions); i++ {
-		src.QueueParseResult(sessions[i].ID, source.SourceUpdate{
+		src.QueueParseResult(sessions[i].ID, source.Update{
 			SessionID: sessions[i].ID,
 			Activity:  sessions[i].Activity,
 			Model:     sessions[i].Model,
@@ -169,7 +169,7 @@ func TestServer_DeltaDelivery(t *testing.T) {
 		Seq:  1,
 		At:   time.Now(),
 		Type: monitor.EventDelta,
-		Updates: []session.SessionState{
+		Updates: []session.State{
 			{ID: "sess-1", Activity: session.ActivityIdle},
 		},
 	}
@@ -213,7 +213,7 @@ func TestServer_MultipleClients(t *testing.T) {
 		Seq:  1,
 		At:   time.Now(),
 		Type: monitor.EventDelta,
-		Updates: []session.SessionState{
+		Updates: []session.State{
 			{ID: "sess-1", Activity: session.ActivityIdle},
 		},
 	}
@@ -288,7 +288,7 @@ func TestServer_SlowClientEviction(t *testing.T) {
 			Seq:  uint64(sent + 1),
 			At:   time.Now(),
 			Type: monitor.EventDelta,
-			Updates: []session.SessionState{
+			Updates: []session.State{
 				{ID: id, Activity: session.ActivityWorking},
 			},
 		}
@@ -456,7 +456,7 @@ func TestServer_ConcurrentBroadcast(t *testing.T) {
 				Seq:  uint64(seq),
 				At:   time.Now(),
 				Type: monitor.EventDelta,
-				Updates: []session.SessionState{
+				Updates: []session.State{
 					{ID: "sess-1", Activity: session.ActivityWorking},
 				},
 			}

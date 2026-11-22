@@ -106,7 +106,7 @@ func TestSnapshot_CloneIndependence(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:     "s1",
 		Activity:      session.ActivityWorking,
 		Model:         "opus",
@@ -155,7 +155,7 @@ func TestPollOnce_SingleSourceSingleSession(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "claude", WorkingDir: "/project", StartedAt: started},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:          "s1",
 		Activity:           session.ActivityWorking,
 		Model:              "opus",
@@ -244,7 +244,7 @@ func TestPollOnce_MultiSource(t *testing.T) {
 	src1.SetHandles([]source.SessionHandle{
 		{ID: "claude-1", Source: "claude", StartedAt: clk.Now()},
 	})
-	src1.AddUpdate("claude-1", source.SourceUpdate{
+	src1.AddUpdate("claude-1", source.Update{
 		SessionID: "claude-1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus",
@@ -254,7 +254,7 @@ func TestPollOnce_MultiSource(t *testing.T) {
 	src2.SetHandles([]source.SessionHandle{
 		{ID: "codex-1", Source: "codex", StartedAt: clk.Now()},
 	})
-	src2.AddUpdate("codex-1", source.SourceUpdate{
+	src2.AddUpdate("codex-1", source.Update{
 		SessionID: "codex-1",
 		Activity:  session.ActivityIdle,
 		Model:     "o3",
@@ -278,7 +278,7 @@ func TestPollOnce_MultiSource(t *testing.T) {
 		t.Fatalf("expected 2 sessions, got %d", len(snap))
 	}
 
-	byID := make(map[string]session.SessionState)
+	byID := make(map[string]session.State)
 	for i := 0; i < len(snap); i++ {
 		byID[snap[i].ID] = snap[i]
 	}
@@ -307,7 +307,7 @@ func TestPollOnce_UpdatePropagation(t *testing.T) {
 	})
 
 	// First poll: initial data.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:          "s1",
 		Activity:           session.ActivityWorking,
 		Model:              "opus",
@@ -332,7 +332,7 @@ func TestPollOnce_UpdatePropagation(t *testing.T) {
 
 	// Second poll: updated data with deltas.
 	clk.Advance(5 * time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:          "s1",
 		Activity:           session.ActivityIdle,
 		ContextTokens:      2000,
@@ -384,7 +384,7 @@ func TestPollOnce_CompactionAccumulation(t *testing.T) {
 	})
 
 	// First poll: one compaction event.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:            "s1",
 		Activity:             session.ActivityWorking,
 		CompactionCountDelta: 1,
@@ -410,7 +410,7 @@ func TestPollOnce_CompactionAccumulation(t *testing.T) {
 
 	// Second poll: two more compaction events.
 	clk.Advance(5 * time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:            "s1",
 		Activity:             session.ActivityWorking,
 		CompactionCountDelta: 2,
@@ -439,7 +439,7 @@ func TestPollOnce_ContextUtilization(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:        "s1",
 		Activity:         session.ActivityWorking,
 		ContextTokens:    50000,
@@ -477,7 +477,7 @@ func TestPollOnce_TerminalTransition(t *testing.T) {
 	})
 
 	// First poll: active.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -500,7 +500,7 @@ func TestPollOnce_TerminalTransition(t *testing.T) {
 	// Second poll: terminal.
 	clk.Advance(10 * time.Second)
 	endedAt := clk.Now()
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "completed",
@@ -548,7 +548,7 @@ func TestPollOnce_ResumedFromTerminal(t *testing.T) {
 	})
 
 	// Poll 1: active.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -570,7 +570,7 @@ func TestPollOnce_ResumedFromTerminal(t *testing.T) {
 
 	// Poll 2: terminal.
 	clk.Advance(5 * time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "done",
@@ -586,7 +586,7 @@ func TestPollOnce_ResumedFromTerminal(t *testing.T) {
 
 	// Poll 3: resumed with new data.
 	clk.Advance(5 * time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c3")
@@ -627,7 +627,7 @@ func TestPollOnce_NoNewData(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	// No updates queued — Parse will return zero SourceUpdate.
+	// No updates queued — Parse will return zero Update.
 
 	sink := &recordingSink{}
 	m, err := monitor.New(
@@ -661,7 +661,7 @@ func TestPollOnce_LifecycleEventDelivery(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -720,7 +720,7 @@ func TestPollOnce_EventSequencing(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -763,13 +763,13 @@ func TestPollOnce_StateCommittedBeforeSinkCall(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
 
 	var mon *monitor.Monitor
-	var snapshotDuringSink []session.SessionState
+	var snapshotDuringSink []session.State
 
 	sink := &funcSink{fn: func(_ context.Context, ev monitor.Event) error {
 		// During the first lifecycle event, take a snapshot.
@@ -871,7 +871,7 @@ func TestPollOnce_SubagentsPropagated(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Subagents: []session.SubagentState{
@@ -911,19 +911,19 @@ func TestPollOnce_SubagentsMergedByIDAcrossPolls(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Subagents: []session.SubagentState{{
 			ID: "sub-1", Slug: "child", Model: "m1", Activity: session.ActivityWorking,
 			StartedAt: clk.Now(), MessageCount: 4, ToolCallCount: 2, ContextTokens: 50,
 		}},
 	}, "c1")
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Subagents: []session.SubagentState{{ID: "sub-2", Activity: session.ActivityWorking}},
 	}, "c2")
 	completedAt := clk.Now().Add(time.Minute)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Subagents: []session.SubagentState{{ID: "sub-1", Activity: session.ActivityTerminal, CompletedAt: completedAt}},
 	}, "c3")
@@ -969,7 +969,7 @@ func TestPollOnce_TerminalDefaultEndedAt(t *testing.T) {
 	})
 
 	// Active first.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -985,7 +985,7 @@ func TestPollOnce_TerminalDefaultEndedAt(t *testing.T) {
 
 	// Terminal with zero EndedAt — should default to clock.Now().
 	clk.Advance(10 * time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "timeout",
@@ -1017,7 +1017,7 @@ func TestTransition_ActiveToTerminal_Stale(t *testing.T) {
 	})
 
 	// First poll: discover the session.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1046,7 +1046,7 @@ func TestTransition_ActiveToTerminal_Stale(t *testing.T) {
 
 	// Advance past stale threshold with no new data.
 	clk.Advance(staleThreshold + time.Second)
-	// No new update queued — Parse returns zero SourceUpdate.
+	// No new update queued — Parse returns zero Update.
 
 	sink.events = nil // reset events
 	if err := m.PollOnce(ctx); err != nil {
@@ -1097,7 +1097,7 @@ func TestTransition_ActiveNotStale_WithinThreshold(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1143,7 +1143,7 @@ func TestTransition_StaleDisabledWhenZero(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1189,7 +1189,7 @@ func TestTransition_TerminalToRemoved(t *testing.T) {
 	})
 
 	// Poll 1: discover.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1214,7 +1214,7 @@ func TestTransition_TerminalToRemoved(t *testing.T) {
 
 	// Poll 2: terminal.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "done",
@@ -1289,7 +1289,7 @@ func TestPollOnce_RetentionSweepOwnership(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1313,7 +1313,7 @@ func TestPollOnce_RetentionSweepOwnership(t *testing.T) {
 	}
 
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Terminal: true}, "c2")
+	src.AddUpdate("s1", source.Update{SessionID: "s1", Terminal: true}, "c2")
 	if err := m.PollOnce(ctx); err != nil {
 		t.Fatalf("PollOnce 2: %v", err)
 	}
@@ -1361,7 +1361,7 @@ func TestTransition_TerminalNotRemovedBeforeRetention(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1384,7 +1384,7 @@ func TestTransition_TerminalNotRemovedBeforeRetention(t *testing.T) {
 
 	// Terminal transition.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 	}, "c2")
@@ -1418,7 +1418,7 @@ func TestTransition_RemovedToActive_Resumed(t *testing.T) {
 	})
 
 	// Poll 1: discover.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1443,7 +1443,7 @@ func TestTransition_RemovedToActive_Resumed(t *testing.T) {
 
 	// Poll 2: terminal.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "done",
@@ -1466,13 +1466,13 @@ func TestTransition_RemovedToActive_Resumed(t *testing.T) {
 	// Poll 4: new data for the same session ID -> resumed from removed.
 	clk.Advance(time.Second)
 	sink.events = nil
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus-2",
 	}, "c3")
 	// Second result serves the whole-history re-read a resume triggers.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus-2",
@@ -1526,7 +1526,7 @@ func TestTransition_RemovedNoNewData(t *testing.T) {
 	})
 
 	// Discover -> terminal -> removed.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1550,7 +1550,7 @@ func TestTransition_RemovedNoNewData(t *testing.T) {
 	}
 
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 	}, "c2")
@@ -1590,7 +1590,7 @@ func TestTransition_StaleOnlyAffectsActiveSessions(t *testing.T) {
 	})
 
 	// Discover and then immediately terminal.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1613,7 +1613,7 @@ func TestTransition_StaleOnlyAffectsActiveSessions(t *testing.T) {
 
 	// Terminal.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 	}, "c2")
@@ -1663,7 +1663,7 @@ func TestTransition_FullLifecycle(t *testing.T) {
 	ctx := context.Background()
 
 	// Step 1: discovered.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus",
@@ -1674,7 +1674,7 @@ func TestTransition_FullLifecycle(t *testing.T) {
 
 	// Step 2: updated.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID:     "s1",
 		Activity:      session.ActivityIdle,
 		ContextTokens: 500,
@@ -1685,7 +1685,7 @@ func TestTransition_FullLifecycle(t *testing.T) {
 
 	// Step 3: terminal.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "user exit",
@@ -1716,13 +1716,13 @@ func TestTransition_FullLifecycle(t *testing.T) {
 
 	// Step 6: resumed from removed.
 	clk.Advance(time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus-2",
 	}, "c4")
 	// Second result serves the whole-history re-read a resume triggers.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "opus-2",
@@ -1774,7 +1774,7 @@ func TestTransition_StaleResetsOnNewData(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -1798,7 +1798,7 @@ func TestTransition_StaleResetsOnNewData(t *testing.T) {
 	clk.Advance(staleThreshold - time.Second)
 
 	// New data arrives — resets LastDataReceivedAt.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityIdle,
 	}, "c2")
@@ -1833,11 +1833,11 @@ func TestTransition_MultipleSessionsIndependentLifecycles(t *testing.T) {
 	})
 
 	// Both start active.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
-	src.AddUpdate("s2", source.SourceUpdate{
+	src.AddUpdate("s2", source.Update{
 		SessionID: "s2",
 		Activity:  session.ActivityIdle,
 	}, "c1")
@@ -1861,7 +1861,7 @@ func TestTransition_MultipleSessionsIndependentLifecycles(t *testing.T) {
 
 	// s1 gets new data; s2 does not.
 	clk.Advance(10 * time.Second)
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityIdle,
 	}, "c2")
@@ -1876,7 +1876,7 @@ func TestTransition_MultipleSessionsIndependentLifecycles(t *testing.T) {
 	}
 
 	snap := m.Snapshot()
-	byID := make(map[string]session.SessionState)
+	byID := make(map[string]session.State)
 	for i := 0; i < len(snap); i++ {
 		byID[snap[i].ID] = snap[i]
 	}
@@ -1939,7 +1939,7 @@ func TestRun_TickDrivesPollOnce(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2033,7 +2033,7 @@ func TestRun_MultipleTicks(t *testing.T) {
 	})
 
 	// First tick: discover.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2067,7 +2067,7 @@ func TestRun_MultipleTicks(t *testing.T) {
 	_ = waitForEvent(t, eventCh) // delta
 
 	// Queue second update and tick.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityIdle,
 	}, "c2")
@@ -2096,7 +2096,7 @@ func TestRun_CompletionRetention_RemovesTerminalSession(t *testing.T) {
 	})
 
 	// Tick 1: active.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2131,7 +2131,7 @@ func TestRun_CompletionRetention_RemovesTerminalSession(t *testing.T) {
 	_ = waitForEvent(t, eventCh) // delta
 
 	// Tick 2: terminal.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "completed",
@@ -2188,7 +2188,7 @@ func TestRun_RetentionNotExpired_SessionRetained(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2223,7 +2223,7 @@ func TestRun_RetentionNotExpired_SessionRetained(t *testing.T) {
 	_ = waitForEvent(t, eventCh) // delta
 
 	// Tick 2: terminal.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "done",
@@ -2256,7 +2256,7 @@ func TestRun_RemovedSessionResumes(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2291,7 +2291,7 @@ func TestRun_RemovedSessionResumes(t *testing.T) {
 	_ = waitForEvent(t, eventCh) // delta
 
 	// Tick 2: terminal.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "done",
@@ -2315,13 +2315,13 @@ func TestRun_RemovedSessionResumes(t *testing.T) {
 	}
 
 	// Queue new data for the removed session.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "sonnet",
 	}, "c3")
 	// Second result serves the whole-history re-read a resume triggers.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 		Model:     "sonnet",
@@ -2369,7 +2369,7 @@ func TestRun_EventSeqMonotonicAcrossTicks(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2403,7 +2403,7 @@ func TestRun_EventSeqMonotonicAcrossTicks(t *testing.T) {
 	ev2 := waitForEvent(t, eventCh) // delta
 
 	// Tick 2 with update.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityIdle,
 	}, "c2")
@@ -2433,7 +2433,7 @@ func TestRun_CompletionRetention_WithRemovalEvent(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2473,7 +2473,7 @@ func TestRun_CompletionRetention_WithRemovalEvent(t *testing.T) {
 	_ = waitForEvent(t, eventCh)
 
 	// Tick 2: terminal.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 		EndReason: "done",
@@ -2518,7 +2518,7 @@ func TestPollOnce_SubagentCompletionMarksMatchingSession(t *testing.T) {
 	})
 
 	// Poll 1: both sessions discovered and active.
-	src.AddUpdate("parent-1", source.SourceUpdate{
+	src.AddUpdate("parent-1", source.Update{
 		SessionID: "parent-1",
 		Slug:      "orchestrator",
 		Activity:  session.ActivityWorking,
@@ -2526,7 +2526,7 @@ func TestPollOnce_SubagentCompletionMarksMatchingSession(t *testing.T) {
 			{ID: "tu-1", Slug: "explore-task", Activity: session.ActivityWorking},
 		},
 	}, "c1")
-	src.AddUpdate("subagent-1", source.SourceUpdate{
+	src.AddUpdate("subagent-1", source.Update{
 		SessionID: "subagent-1",
 		Slug:      "explore-task",
 		Activity:  session.ActivityWorking,
@@ -2558,7 +2558,7 @@ func TestPollOnce_SubagentCompletionMarksMatchingSession(t *testing.T) {
 	clk.Advance(5 * time.Second)
 	sink.events = nil
 
-	src.AddUpdate("parent-1", source.SourceUpdate{
+	src.AddUpdate("parent-1", source.Update{
 		SessionID: "parent-1",
 		Slug:      "orchestrator",
 		Activity:  session.ActivityWorking,
@@ -2574,7 +2574,7 @@ func TestPollOnce_SubagentCompletionMarksMatchingSession(t *testing.T) {
 
 	// The subagent session should now be terminal — NOT waiting 5 minutes.
 	snap = m.Snapshot()
-	byID := make(map[string]session.SessionState)
+	byID := make(map[string]session.State)
 	for i := 0; i < len(snap); i++ {
 		byID[snap[i].ID] = snap[i]
 	}
@@ -2624,7 +2624,7 @@ func TestPollOnce_SubagentCompletion_NoFalsePositives(t *testing.T) {
 	})
 
 	// Parent reports subagent still working (not completed).
-	src.AddUpdate("parent-1", source.SourceUpdate{
+	src.AddUpdate("parent-1", source.Update{
 		SessionID: "parent-1",
 		Slug:      "parent-slug",
 		Activity:  session.ActivityWorking,
@@ -2632,7 +2632,7 @@ func TestPollOnce_SubagentCompletion_NoFalsePositives(t *testing.T) {
 			{ID: "tu-1", Slug: "worker-slug", Activity: session.ActivityWorking},
 		},
 	}, "c1")
-	src.AddUpdate("sub-1", source.SourceUpdate{
+	src.AddUpdate("sub-1", source.Update{
 		SessionID: "sub-1",
 		Slug:      "worker-slug",
 		Activity:  session.ActivityWorking,
@@ -2673,7 +2673,7 @@ func TestPollOnce_SubagentCompletion_DoesNotAffectParent(t *testing.T) {
 	})
 
 	// Both active.
-	src.AddUpdate("parent", source.SourceUpdate{
+	src.AddUpdate("parent", source.Update{
 		SessionID: "parent",
 		Slug:      "main-session",
 		Activity:  session.ActivityWorking,
@@ -2681,7 +2681,7 @@ func TestPollOnce_SubagentCompletion_DoesNotAffectParent(t *testing.T) {
 			{ID: "tu-1", Slug: "child-slug", Activity: session.ActivityWorking},
 		},
 	}, "c1")
-	src.AddUpdate("child", source.SourceUpdate{
+	src.AddUpdate("child", source.Update{
 		SessionID: "child",
 		Slug:      "child-slug",
 		Activity:  session.ActivityWorking,
@@ -2703,7 +2703,7 @@ func TestPollOnce_SubagentCompletion_DoesNotAffectParent(t *testing.T) {
 
 	// Parent reports subagent done.
 	clk.Advance(time.Second)
-	src.AddUpdate("parent", source.SourceUpdate{
+	src.AddUpdate("parent", source.Update{
 		SessionID: "parent",
 		Slug:      "main-session",
 		Activity:  session.ActivityWorking,
@@ -2717,7 +2717,7 @@ func TestPollOnce_SubagentCompletion_DoesNotAffectParent(t *testing.T) {
 	}
 
 	snap := m.Snapshot()
-	byID := make(map[string]session.SessionState)
+	byID := make(map[string]session.State)
 	for i := 0; i < len(snap); i++ {
 		byID[snap[i].ID] = snap[i]
 	}
@@ -2746,8 +2746,8 @@ func TestPollOnce_SubagentCompletion_ScopedToSource(t *testing.T) {
 		{ID: "other-b", Source: "b", StartedAt: clk.Now()},
 	})
 
-	parentUpdate := func(act session.Activity) source.SourceUpdate {
-		return source.SourceUpdate{
+	parentUpdate := func(act session.Activity) source.Update {
+		return source.Update{
 			SessionID: "parent-a",
 			Slug:      "parent-slug",
 			Activity:  session.ActivityWorking,
@@ -2757,12 +2757,12 @@ func TestPollOnce_SubagentCompletion_ScopedToSource(t *testing.T) {
 		}
 	}
 	srcA.AddUpdate("parent-a", parentUpdate(session.ActivityWorking), "c1")
-	srcA.AddUpdate("child-a", source.SourceUpdate{
+	srcA.AddUpdate("child-a", source.Update{
 		SessionID: "child-a",
 		Slug:      "shared-slug",
 		Activity:  session.ActivityWorking,
 	}, "c1")
-	srcB.AddUpdate("other-b", source.SourceUpdate{
+	srcB.AddUpdate("other-b", source.Update{
 		SessionID: "other-b",
 		Slug:      "shared-slug",
 		Activity:  session.ActivityWorking,
@@ -2787,7 +2787,7 @@ func TestPollOnce_SubagentCompletion_ScopedToSource(t *testing.T) {
 		t.Fatalf("PollOnce 2: %v", err)
 	}
 
-	byID := make(map[string]session.SessionState)
+	byID := make(map[string]session.State)
 	for _, s := range m.Snapshot() {
 		byID[s.ID] = s
 	}
@@ -2811,8 +2811,8 @@ func TestPollOnce_SubagentCompletion_ResumedNotReTerminated(t *testing.T) {
 		{ID: "parent", Source: "test", StartedAt: clk.Now()},
 		{ID: "child", Source: "test", StartedAt: clk.Now()},
 	})
-	parentUpdate := func(act session.Activity) source.SourceUpdate {
-		return source.SourceUpdate{
+	parentUpdate := func(act session.Activity) source.Update {
+		return source.Update{
 			SessionID: "parent",
 			Slug:      "main-session",
 			Activity:  session.ActivityWorking,
@@ -2821,7 +2821,7 @@ func TestPollOnce_SubagentCompletion_ResumedNotReTerminated(t *testing.T) {
 			},
 		}
 	}
-	childUpdate := source.SourceUpdate{
+	childUpdate := source.Update{
 		SessionID: "child",
 		Slug:      "child-slug",
 		Activity:  session.ActivityWorking,
@@ -2891,7 +2891,7 @@ func TestRun_Race(t *testing.T) {
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
 
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -2923,7 +2923,7 @@ func TestRun_Race(t *testing.T) {
 
 	for i := 0; i < 10; i++ {
 		clk.Advance(time.Second)
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID: "s1",
 			Activity:  session.ActivityWorking,
 		}, source.Cursor(fmt.Sprintf("c%d", i+2)))

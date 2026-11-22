@@ -39,11 +39,11 @@ func applyPolicy(p session.Policy, ev monitor.Event) monitor.Event {
 	return ev
 }
 
-func applyPolicyStates(p session.Policy, states []session.SessionState) []session.SessionState {
+func applyPolicyStates(p session.Policy, states []session.State) []session.State {
 	if states == nil {
 		return nil
 	}
-	out := make([]session.SessionState, len(states))
+	out := make([]session.State, len(states))
 	for i := 0; i < len(states); i++ {
 		out[i] = p.Apply(states[i])
 	}

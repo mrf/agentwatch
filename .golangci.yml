@@ -105,7 +105,6 @@ linters:
     revive:
       rules:
         - name: exported
-          disabled: true # stutter check (session.SessionState etc.) flags the public API; renaming is a breaking change.
 
   exclusions:
     generated: lax

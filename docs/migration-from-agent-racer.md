@@ -22,11 +22,11 @@ This guide maps old types and patterns to their new equivalents.
 
 ## Type Mapping
 
-### SessionState
+### State
 
 The public session state was slimmed significantly. All racer-specific and privacy-sensitive fields were removed.
 
-**Unchanged fields** (same name and semantics on `session.SessionState`): `ID`, `Source`, `Slug`, `Activity`, `Model`, `WorkingDir`, `Branch`, `CurrentTool`, `ContextTokens`, `OutputTokens`, `MaxContextTokens`, `ContextUtilization`, `TokenEstimated`, `MessageCount`, `ToolCallCount`, `StartedAt`, `LastActivityAt`, `LastDataReceivedAt`, `CompletedAt`, `Subagents`.
+**Unchanged fields** (same name and semantics on `session.State`): `ID`, `Source`, `Slug`, `Activity`, `Model`, `WorkingDir`, `Branch`, `CurrentTool`, `ContextTokens`, `OutputTokens`, `MaxContextTokens`, `ContextUtilization`, `TokenEstimated`, `MessageCount`, `ToolCallCount`, `StartedAt`, `LastActivityAt`, `LastDataReceivedAt`, `CompletedAt`, `Subagents`.
 
 **Removed fields:**
 
@@ -95,7 +95,7 @@ The new WS server is a generic `monitor.EventSink` adapter with no racer-specifi
 
 - JSONL complete-line reader (`internal/jsonl`)
 - Claude parser and fixtures (`sources/claude/parser.go`)
-- Store clone and lock discipline (`session.SessionState.Clone()`)
+- Store clone and lock discipline (`session.State.Clone()`)
 - End-marker validation logic (`sources/claude`)
 - Health hysteresis (`monitor.Health`, `WithHealthThreshold`)
 - Deadlock detection test patterns (race tests in monitor and session packages)

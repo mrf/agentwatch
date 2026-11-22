@@ -20,8 +20,8 @@ func (m *mockSource) Discover(_ context.Context) ([]source.SessionHandle, error)
 	return nil, nil
 }
 
-func (m *mockSource) Parse(_ context.Context, _ source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
-	return source.SourceUpdate{}, c, nil
+func (m *mockSource) Parse(_ context.Context, _ source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
+	return source.Update{}, c, nil
 }
 
 // ---- Registry tests ----
@@ -123,7 +123,7 @@ func TestRegistry_FactoryExecution(t *testing.T) {
 	}
 }
 
-// ---- SessionHandle and SourceUpdate type shape tests ----
+// ---- SessionHandle and Update type shape tests ----
 // These tests verify the struct fields exist with the expected types.
 
 func TestSessionHandle_Fields(t *testing.T) {
@@ -141,7 +141,7 @@ func TestSessionHandle_Fields(t *testing.T) {
 
 func TestSourceUpdate_Fields(t *testing.T) {
 	// Verify the struct compiles and all required fields are accessible.
-	u := source.SourceUpdate{
+	u := source.Update{
 		SessionID:          "sess-1",
 		Slug:               "my-task",
 		Model:              "claude-opus-4-6",

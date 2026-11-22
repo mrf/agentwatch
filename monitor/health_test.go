@@ -24,7 +24,7 @@ func TestHealth_InitiallyHealthy(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "claude", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -73,7 +73,7 @@ func TestHealth_HealthyToDegradedToFailed(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "claude", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -136,7 +136,7 @@ func TestHealth_ParseFailuresDegradeHealth(t *testing.T) {
 	})
 
 	// First poll succeeds.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -159,7 +159,7 @@ func TestHealth_ParseFailuresDegradeHealth(t *testing.T) {
 	// Queue parse errors.
 	for i := 0; i < threshold; i++ {
 		clk.Advance(time.Second)
-		src.QueueParseResult("s1", source.SourceUpdate{}, "", fmt.Errorf("parse error %d", i))
+		src.QueueParseResult("s1", source.Update{}, "", fmt.Errorf("parse error %d", i))
 		if err := m.PollOnce(ctx); err != nil {
 			t.Fatalf("PollOnce %d: %v", i+2, err)
 		}
@@ -184,7 +184,7 @@ func TestHealth_RecoveryToHealthy(t *testing.T) {
 	})
 
 	// First poll succeeds.
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -219,7 +219,7 @@ func TestHealth_RecoveryToHealthy(t *testing.T) {
 	for i := 0; i < threshold; i++ {
 		assertHealthStatus(t, m, "claude", monitor.HealthDegraded)
 		clk.Advance(time.Second)
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID: "s1",
 			Activity:  session.ActivityIdle,
 		}, source.Cursor(fmt.Sprintf("c%d", i+2)))
@@ -248,7 +248,7 @@ func TestHealth_EventDeliveredOnStatusChange(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -316,7 +316,7 @@ func TestHealth_NoEventWhenStatusUnchanged(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -361,7 +361,7 @@ func TestHealth_ErrorSanitization(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -415,7 +415,7 @@ func TestHealth_ParseFailureCategory(t *testing.T) {
 	t.Parallel()
 	src := mock.New(mock.WithName("test"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
-	src.QueueParseResult("s1", source.SourceUpdate{}, "", errors.New("decode /home/u/My Projects/s1.jsonl: read/write"))
+	src.QueueParseResult("s1", source.Update{}, "", errors.New("decode /home/u/My Projects/s1.jsonl: read/write"))
 
 	m, err := monitor.New(monitor.WithSources(src), monitor.WithHealthThreshold(1))
 	if err != nil {
@@ -439,7 +439,7 @@ func TestHealth_MultiSourceIndependent(t *testing.T) {
 	src1.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "claude", StartedAt: clk.Now()},
 	})
-	src1.AddUpdate("s1", source.SourceUpdate{
+	src1.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -448,7 +448,7 @@ func TestHealth_MultiSourceIndependent(t *testing.T) {
 	src2.SetHandles([]source.SessionHandle{
 		{ID: "s2", Source: "codex", StartedAt: clk.Now()},
 	})
-	src2.AddUpdate("s2", source.SourceUpdate{
+	src2.AddUpdate("s2", source.Update{
 		SessionID: "s2",
 		Activity:  session.ActivityWorking,
 	}, "x1")
@@ -470,7 +470,7 @@ func TestHealth_MultiSourceIndependent(t *testing.T) {
 	// Fail src1 only.
 	clk.Advance(time.Second)
 	src1.QueueDiscoverError(errors.New("src1 down"))
-	src2.AddUpdate("s2", source.SourceUpdate{
+	src2.AddUpdate("s2", source.Update{
 		SessionID: "s2",
 		Activity:  session.ActivityIdle,
 	}, "x2")
@@ -497,7 +497,7 @@ func TestHealth_DefaultThreshold(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")
@@ -544,7 +544,7 @@ func TestHealth_ConcurrentAccess(t *testing.T) {
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{
+	src.AddUpdate("s1", source.Update{
 		SessionID: "s1",
 		Activity:  session.ActivityWorking,
 	}, "c1")

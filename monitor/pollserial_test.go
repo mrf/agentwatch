@@ -31,7 +31,7 @@ func (c *cursorSource) Discover(context.Context) ([]source.SessionHandle, error)
 	return []source.SessionHandle{c.handle}, nil
 }
 
-func (c *cursorSource) Parse(_ context.Context, h source.SessionHandle, cur source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (c *cursorSource) Parse(_ context.Context, h source.SessionHandle, cur source.Cursor) (source.Update, source.Cursor, error) {
 	c.parses.Add(1)
 	if c.entered != nil {
 		c.entered <- struct{}{}
@@ -41,9 +41,9 @@ func (c *cursorSource) Parse(_ context.Context, h source.SessionHandle, cur sour
 	}
 	time.Sleep(c.parseDelay)
 	if cur != "" {
-		return source.SourceUpdate{}, cur, nil
+		return source.Update{}, cur, nil
 	}
-	return source.SourceUpdate{
+	return source.Update{
 		SessionID:          h.ID,
 		Activity:           session.ActivityWorking,
 		MessageCountDelta:  1,

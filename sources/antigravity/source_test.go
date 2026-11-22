@@ -16,16 +16,16 @@ const (
 	testID2 = "18fa5a17-5f09-4458-850b-bde7ad87cc2c"
 )
 
-func newTestSource(t *testing.T, opts ...Option) *AntigravitySource {
+func newTestSource(t *testing.T, opts ...Option) *Source {
 	t.Helper()
 	s, err := New(opts...)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return s.(*AntigravitySource)
+	return s.(*Source)
 }
 
-func parse(t *testing.T, s *AntigravitySource, c *convDB, cur source.Cursor) (source.SourceUpdate, source.Cursor) {
+func parse(t *testing.T, s *Source, c *convDB, cur source.Cursor) (source.Update, source.Cursor) {
 	t.Helper()
 	h := source.SessionHandle{ID: testID, Path: c.path, Source: "antigravity"}
 	u, next, err := s.Parse(context.Background(), h, cur)
@@ -403,7 +403,7 @@ func TestDiscover_WindowCountsWALActivity(t *testing.T) {
 }
 
 func TestDiscover_EmptyAndMissingRoot(t *testing.T) {
-	for _, s := range []*AntigravitySource{
+	for _, s := range []*Source{
 		newTestSource(t),
 		newTestSource(t, WithRoot("/nonexistent/antigravity/path")),
 	} {

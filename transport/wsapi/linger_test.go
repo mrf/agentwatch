@@ -70,7 +70,7 @@ func TestServer_WriteErrorClosesConnection(t *testing.T) {
 			Seq:     uint64(i + 1),
 			At:      time.Now(),
 			Type:    monitor.EventDelta,
-			Updates: []session.SessionState{{ID: id, Activity: session.ActivityWorking}},
+			Updates: []session.State{{ID: id, Activity: session.ActivityWorking}},
 		})
 	}
 	if n := srv.ClientCount(); n != 0 {

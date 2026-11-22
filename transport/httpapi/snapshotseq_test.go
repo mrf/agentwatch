@@ -35,7 +35,7 @@ func TestHandler_ListSessions_SeqHeader(t *testing.T) {
 	src := mock.New(
 		mock.WithName("mock"),
 		mock.WithHandles(source.SessionHandle{ID: id, Source: "mock", StartedAt: time.Now()}),
-		mock.WithParseResult(id, source.SourceUpdate{
+		mock.WithParseResult(id, source.Update{
 			SessionID: id,
 			Activity:  session.ActivityWorking,
 			Model:     "test-model",
@@ -80,7 +80,7 @@ func TestHandler_ListSessions_SeqHeader(t *testing.T) {
 
 	// Body stays a plain JSON array, and already reflects every delta with
 	// Seq <= header (so a client drops those).
-	var states []session.SessionState
+	var states []session.State
 	if err := json.NewDecoder(w.Body).Decode(&states); err != nil {
 		t.Fatalf("body is not a JSON array of sessions: %v", err)
 	}

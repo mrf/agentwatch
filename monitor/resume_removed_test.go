@@ -23,13 +23,13 @@ func removedSessionFixture(t *testing.T) (*monitor.Monitor, *mock.Source, *recor
 	src.SetHandles([]source.SessionHandle{
 		{ID: "s1", Source: "test", StartedAt: t0.Add(time.Hour)},
 	})
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID:          "s1",
 		StartedAt:          t0,
 		MessageCountDelta:  3,
 		ToolCallCountDelta: 2,
 	}, "c1", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID: "s1",
 		Terminal:  true,
 	}, "c2", nil)
@@ -74,12 +74,12 @@ func TestResumeAfterRemoval_CountsCoverFullHistory(t *testing.T) {
 
 	// Resume poll: the incremental parse (cursor c2) sees one new message;
 	// the monitor then re-reads from a zero cursor and gets the full history.
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID:         "s1",
 		StartedAt:         t0.Add(10 * time.Second),
 		MessageCountDelta: 1,
 	}, "c3", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID:          "s1",
 		StartedAt:          t0,
 		MessageCountDelta:  4,
@@ -155,10 +155,10 @@ func TestResumeAfterRemoval_RereadErrorRetries(t *testing.T) {
 	t.Parallel()
 	m, src, _, t0 := removedSessionFixture(t)
 
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID: "s1", MessageCountDelta: 1,
 	}, "c3", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{}, "", errors.New("boom"))
+	src.QueueParseResult("s1", source.Update{}, "", errors.New("boom"))
 
 	if err := m.PollOnce(context.Background()); err != nil {
 		t.Fatalf("PollOnce failing re-read: %v", err)
@@ -167,10 +167,10 @@ func TestResumeAfterRemoval_RereadErrorRetries(t *testing.T) {
 		t.Fatalf("session resumed despite failed re-read (%d in snapshot)", n)
 	}
 
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID: "s1", MessageCountDelta: 1,
 	}, "c3", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{
+	src.QueueParseResult("s1", source.Update{
 		SessionID: "s1", StartedAt: t0, MessageCountDelta: 4, ToolCallCountDelta: 2,
 	}, "c4", nil)
 	if err := m.PollOnce(context.Background()); err != nil {

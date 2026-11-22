@@ -24,7 +24,7 @@ type Monitor struct {
 	pollSem chan struct{}
 
 	mu      sync.Mutex
-	store   map[string]session.SessionState
+	store   map[string]session.State
 	cursors map[string]cursorEntry // "source:sessionID" -> cursor
 	removed map[string]struct{}    // session IDs removed by retention sweep
 	// contentStart holds IDs whose StartedAt came from source content rather
@@ -50,7 +50,7 @@ func New(opts ...Option) (*Monitor, error) {
 	return &Monitor{
 		cfg:          cfg,
 		pollSem:      make(chan struct{}, 1),
-		store:        make(map[string]session.SessionState),
+		store:        make(map[string]session.State),
 		cursors:      make(map[string]cursorEntry),
 		removed:      make(map[string]struct{}),
 		contentStart: make(map[string]struct{}),
@@ -106,7 +106,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 // pollBatch accumulates one PollOnce's committed changes for delivery after
 // every store lock is released.
 type pollBatch struct {
-	updates      []session.SessionState
+	updates      []session.State
 	lifecycles   []session.LifecycleEvent
 	healthEvents []Health
 	completions  []subagentCompletion
@@ -156,7 +156,7 @@ func (m *Monitor) pollSource(ctx context.Context, src source.Source, b *pollBatc
 		// lines has no SessionID but still happened.
 		skipped += update.SkippedLines
 
-		// No new data — zero SourceUpdate per the source contract.
+		// No new data — zero Update per the source contract.
 		if update.SessionID == "" {
 			continue
 		}
@@ -179,7 +179,7 @@ func (m *Monitor) pollSource(ctx context.Context, src source.Source, b *pollBatc
 
 // parseHandle parses h from its stored cursor and persists the returned
 // cursor. It reports false, after logging, when the parse failed.
-func (m *Monitor) parseHandle(ctx context.Context, src source.Source, h source.SessionHandle) (source.SourceUpdate, bool) {
+func (m *Monitor) parseHandle(ctx context.Context, src source.Source, h source.SessionHandle) (source.Update, bool) {
 	srcName := src.Name()
 	cKey := cursorKey(srcName, h.ID)
 
@@ -220,7 +220,7 @@ func (m *Monitor) parseHandle(ctx context.Context, src source.Source, h source.S
 			"session", h.ID,
 			"error", parseErr,
 		)
-		return source.SourceUpdate{}, false
+		return source.Update{}, false
 	}
 	return update, true
 }
@@ -228,7 +228,7 @@ func (m *Monitor) parseHandle(ctx context.Context, src source.Source, h source.S
 // commitUpdate applies a non-empty update to the store under m.mu and queues
 // the resulting state and lifecycle event on b. Events are delivered after
 // unlock (§12.8).
-func (m *Monitor) commitUpdate(h source.SessionHandle, update source.SourceUpdate, b *pollBatch) {
+func (m *Monitor) commitUpdate(h source.SessionHandle, update source.Update, b *pollBatch) {
 	now := m.cfg.clock.Now()
 
 	m.mu.Lock()
@@ -243,7 +243,7 @@ func (m *Monitor) commitUpdate(h source.SessionHandle, update source.SourceUpdat
 		return
 	}
 
-	var state session.SessionState
+	var state session.State
 	var lcEvent session.LifecycleEvent
 	if existed {
 		_, fromContent := m.contentStart[h.ID]
@@ -274,8 +274,8 @@ func (m *Monitor) commitUpdate(h source.SessionHandle, update source.SourceUpdat
 
 // transitionNew builds the state and lifecycle event for a session absent
 // from the store: Discovered, or Resumed when a retention sweep removed it.
-func transitionNew(h source.SessionHandle, update source.SourceUpdate, now time.Time, wasRemoved bool) (session.SessionState, session.LifecycleEvent) {
-	base := session.SessionState{
+func transitionNew(h source.SessionHandle, update source.Update, now time.Time, wasRemoved bool) (session.State, session.LifecycleEvent) {
+	base := session.State{
 		ID:        h.ID,
 		Source:    h.Source,
 		Lifecycle: session.LifecycleActive,
@@ -298,7 +298,7 @@ func transitionNew(h source.SessionHandle, update source.SourceUpdate, now time.
 
 // transitionExisting applies update to a stored session and returns the new
 // state with its Resumed, Terminal or Updated lifecycle event.
-func transitionExisting(h source.SessionHandle, existing session.SessionState, update source.SourceUpdate, now time.Time, fromContent bool) (session.SessionState, session.LifecycleEvent) {
+func transitionExisting(h source.SessionHandle, existing session.State, update source.Update, now time.Time, fromContent bool) (session.State, session.LifecycleEvent) {
 	state := applyUpdate(existing, update, now, fromContent)
 	lcEvent := session.LifecycleEvent{
 		SessionID: h.ID,
@@ -336,7 +336,7 @@ func transitionExisting(h source.SessionHandle, existing session.SessionState, u
 
 // markTerminal moves the stored session id to terminal at now and queues it
 // on b with a lifecycle event of type typ. Must be called with m.mu held.
-func (m *Monitor) markTerminal(b *pollBatch, id string, s session.SessionState, now time.Time, typ session.LifecycleEventType, reason string) {
+func (m *Monitor) markTerminal(b *pollBatch, id string, s session.State, now time.Time, typ session.LifecycleEventType, reason string) {
 	s.Lifecycle = session.LifecycleTerminal
 	completedAt := now
 	s.CompletedAt = &completedAt
@@ -597,13 +597,13 @@ func (m *Monitor) Health() map[string]Health {
 	return result
 }
 
-// applyUpdate merges a SourceUpdate into a SessionState.
+// applyUpdate merges an Update into a State.
 // Delta fields (MessageCountDelta, ToolCallCountDelta) are accumulated,
 // or replace the counts when u.Reset is set.
 // Current-state fields are overwritten when the source provides a value.
 // startFromContent reports whether state.StartedAt already came from source
 // content rather than the Discover-time handle.
-func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Time, startFromContent bool) session.SessionState {
+func applyUpdate(state session.State, u source.Update, now time.Time, startFromContent bool) session.State {
 	overlay(&state.Slug, u.Slug)
 	overlay(&state.Activity, u.Activity)
 	overlay(&state.Model, u.Model)
@@ -624,7 +624,7 @@ func applyUpdate(state session.SessionState, u source.SourceUpdate, now time.Tim
 }
 
 // applyTokens copies u's token counts into state and recomputes utilization.
-func applyTokens(state *session.SessionState, u source.SourceUpdate) {
+func applyTokens(state *session.State, u source.Update) {
 	// Non-zero counts apply without HasTokens so sources written before the
 	// flag existed keep working.
 	if u.HasTokens || u.ContextTokens != 0 || u.OutputTokens != 0 || u.TokenEstimated {
@@ -642,7 +642,7 @@ func applyTokens(state *session.SessionState, u source.SourceUpdate) {
 
 // applyCounts accumulates u's count deltas into state, or replaces the counts
 // and subagents when u.Reset is set.
-func applyCounts(state *session.SessionState, u source.SourceUpdate) {
+func applyCounts(state *session.State, u source.Update) {
 	if u.Reset {
 		state.MessageCount = u.MessageCountDelta
 		state.ToolCallCount = u.ToolCallCountDelta
@@ -718,7 +718,7 @@ func appendCompletions(dst []subagentCompletion, h source.SessionHandle, prev, n
 
 // matchesCompletion reports whether s (stored under id) shares a source and
 // slug with a completion reported by a different session.
-func matchesCompletion(completions []subagentCompletion, id string, s session.SessionState) bool {
+func matchesCompletion(completions []subagentCompletion, id string, s session.State) bool {
 	for i := 0; i < len(completions); i++ {
 		c := completions[i]
 		if c.source == s.Source && c.slug == s.Slug && c.host != id {
@@ -771,9 +771,9 @@ func overlaySubagent(dst, src session.SubagentState) session.SubagentState {
 // dedupeUpdates collapses repeated sessions in a delta to one entry per ID.
 // A session touched by both the parse loop and a sweep keeps its last state at
 // the position of its first appearance.
-func dedupeUpdates(updates []session.SessionState) []session.SessionState {
+func dedupeUpdates(updates []session.State) []session.State {
 	idx := make(map[string]int, len(updates))
-	out := make([]session.SessionState, 0, len(updates))
+	out := make([]session.State, 0, len(updates))
 	for i := 0; i < len(updates); i++ {
 		u := updates[i]
 		if at, ok := idx[u.ID]; ok {
@@ -789,14 +789,14 @@ func dedupeUpdates(updates []session.SessionState) []session.SessionState {
 // Snapshot returns a deep copy of all currently tracked sessions, ordered by
 // (Source, ID). The returned slice is safe to read and mutate without
 // affecting the monitor.
-func (m *Monitor) Snapshot() []session.SessionState {
+func (m *Monitor) Snapshot() []session.State {
 	m.mu.Lock()
-	states := make([]session.SessionState, 0, len(m.store))
+	states := make([]session.State, 0, len(m.store))
 	for _, s := range m.store {
 		states = append(states, s.Clone())
 	}
 	m.mu.Unlock()
-	slices.SortFunc(states, func(a, b session.SessionState) int {
+	slices.SortFunc(states, func(a, b session.State) int {
 		return cmp.Or(cmp.Compare(a.Source, b.Source), cmp.Compare(a.ID, b.ID))
 	})
 	return states
@@ -809,7 +809,7 @@ func (m *Monitor) Snapshot() []session.SessionState {
 // was assigned, so the sessions already reflect it. Events with a higher Seq
 // may or may not be reflected, so a consumer that bootstraps from this
 // snapshot must apply only events with Seq > the returned seq.
-func (m *Monitor) SnapshotWithSeq() ([]session.SessionState, uint64) {
+func (m *Monitor) SnapshotWithSeq() ([]session.State, uint64) {
 	// seq is read before the store: reading it after could claim a Seq whose
 	// state the snapshot missed, but never the reverse.
 	seq := m.seq.Load()
@@ -817,8 +817,8 @@ func (m *Monitor) SnapshotWithSeq() ([]session.SessionState, uint64) {
 }
 
 // Get returns a deep copy of the session with the given ID and true,
-// or a zero SessionState and false if no session with that ID exists.
-func (m *Monitor) Get(id string) (session.SessionState, bool) {
+// or a zero State and false if no session with that ID exists.
+func (m *Monitor) Get(id string) (session.State, bool) {
 	m.mu.Lock()
 	s, ok := m.store[id]
 	if ok {

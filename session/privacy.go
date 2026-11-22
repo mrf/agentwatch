@@ -1,13 +1,13 @@
 package session
 
-// Policy controls which SessionState fields are redacted before external
+// Policy controls which State fields are redacted before external
 // exposure. A zero-value Policy is a passthrough — nothing is redacted.
 //
 // All fields default to false (no redaction). Callers opt in to each
 // redaction independently so that consumers can choose the sensitivity
 // level appropriate for their deployment.
 //
-// Design note: every exported field of SessionState and SubagentState must be
+// Design note: every exported field of State and SubagentState must be
 // reviewed and listed in the TestPrivacyFilter_FieldCoverage sentinel test. If
 // you add a field to either struct, add it to that set and assess whether it
 // belongs under an existing or new Policy flag.
@@ -46,7 +46,7 @@ type Policy struct {
 
 // SessionID returns id as it should appear externally under p: unchanged,
 // pseudonymized, or blank. Transports use it for identifiers outside a
-// SessionState, such as removal lists and lifecycle events.
+// State, such as removal lists and lifecycle events.
 func (p Policy) SessionID(id string) string {
 	switch {
 	case p.Pseudonymizer != nil:
@@ -60,7 +60,7 @@ func (p Policy) SessionID(id string) string {
 
 // Apply returns a deep copy of s with sensitive fields redacted according to
 // the policy. The original state is never mutated.
-func (p Policy) Apply(s SessionState) SessionState {
+func (p Policy) Apply(s State) State {
 	out := s.Clone()
 
 	if p.RedactWorkingDir {

@@ -114,14 +114,14 @@ func (h *handler) getSession(w http.ResponseWriter, r *http.Request) {
 
 // findByPseudonym resolves an ID a client received from a pseudonymizing
 // policy back to its session.
-func (h *handler) findByPseudonym(pseudonym string) (session.SessionState, bool) {
+func (h *handler) findByPseudonym(pseudonym string) (session.State, bool) {
 	states := h.mon.Snapshot()
 	for i := 0; i < len(states); i++ {
 		if h.policy.Pseudonymizer.Pseudonym(states[i].ID) == pseudonym {
 			return states[i], true
 		}
 	}
-	return session.SessionState{}, false
+	return session.State{}, false
 }
 
 type healthzResponse struct {

@@ -1,6 +1,6 @@
 // Package claude provides the Claude Code source for agentwatch.
 //
-// A ClaudeSource discovers sessions by walking a directory of Claude Code
+// A Source discovers sessions by walking a directory of Claude Code
 // project files (typically ~/.claude/projects) and parsing JSONL session logs.
 // Use New with WithRoot to configure the root directory; there are no default
 // paths — consumers choose the location.
@@ -29,14 +29,14 @@ import (
 	"github.com/mrf/agentwatch/source"
 )
 
-// Option configures a ClaudeSource.
-type Option func(*ClaudeSource)
+// Option configures a Source.
+type Option func(*Source)
 
 // WithRoot sets the root directory to scan for Claude Code session files.
 // Discover walks this directory recursively, collecting all *.jsonl files.
 // If root is empty, Discover returns no sessions.
 func WithRoot(path string) Option {
-	return func(s *ClaudeSource) {
+	return func(s *Source) {
 		s.root = path
 	}
 }
@@ -45,17 +45,17 @@ func WithRoot(path string) Option {
 // is within d of the current time. Zero disables age filtering but still uses
 // the efficient directory-mtime-caching walker.
 func WithDiscoverWindow(d time.Duration) Option {
-	return func(s *ClaudeSource) {
+	return func(s *Source) {
 		s.window = d
 	}
 }
 
 // WithSessionEndDir sets the directory where Claude Code deposits session-end
 // hook marker files. When set, Parse checks this directory for a matching
-// marker and signals Terminal=true on the SourceUpdate when one is found.
+// marker and signals Terminal=true on the Update when one is found.
 // The marker file is removed from disk once consumed.
 func WithSessionEndDir(path string) Option {
-	return func(s *ClaudeSource) {
+	return func(s *Source) {
 		s.sessionEndDir = path
 	}
 }
@@ -64,7 +64,7 @@ func WithSessionEndDir(path string) Option {
 // accept. Files larger than this are removed from disk without being parsed.
 // Defaults to 4096 bytes.
 func WithMaxEndMarkerSize(bytes int) Option {
-	return func(s *ClaudeSource) {
+	return func(s *Source) {
 		s.maxEndMarkerSize = bytes
 	}
 }
@@ -121,7 +121,7 @@ type consumedMarker struct {
 	drainedAt time.Time
 }
 
-// claudeCursor is the JSON-encoded cursor format for the ClaudeSource.
+// claudeCursor is the JSON-encoded cursor format for the Source.
 // It persists the file read position plus cross-batch subagent state, so that
 // tool_result completion and subagent counts carry across parse calls.
 type claudeCursor struct {
@@ -130,10 +130,10 @@ type claudeCursor struct {
 	Subagents map[string]subagentEntry `json:"subagents,omitempty"` // subagent ID -> cumulative state
 }
 
-// ClaudeSource discovers and parses Claude Code JSONL session files.
+// Source discovers and parses Claude Code JSONL session files.
 // The zero value is usable but will not discover any sessions until
 // configured with a non-empty root via WithRoot.
-type ClaudeSource struct {
+type Source struct {
 	root             string
 	window           time.Duration
 	sessionEndDir    string
@@ -146,9 +146,9 @@ type ClaudeSource struct {
 	lastMarkerScan   time.Time
 }
 
-// New returns a new ClaudeSource configured by opts.
+// New returns a new Source configured by opts.
 func New(opts ...Option) (source.Source, error) {
-	s := &ClaudeSource{
+	s := &Source{
 		pendingTerminals: make(map[string]consumedMarker),
 	}
 	for i := 0; i < len(opts); i++ {
@@ -168,7 +168,7 @@ func New(opts ...Option) (source.Source, error) {
 	return s, nil
 }
 
-// Register adds a ClaudeSource constructor to r under the name "claude".
+// Register adds a Source constructor to r under the name "claude".
 func Register(r *source.Registry, opts ...Option) error {
 	return r.Register("claude", func() (source.Source, error) {
 		return New(opts...)
@@ -176,7 +176,7 @@ func Register(r *source.Registry, opts ...Option) error {
 }
 
 // Name returns "claude".
-func (s *ClaudeSource) Name() string { return "claude" }
+func (s *Source) Name() string { return "claude" }
 
 // Discover walks the configured root and returns a SessionHandle for every
 // *.jsonl file found. The session ID is derived from the filename (without the
@@ -189,7 +189,7 @@ func (s *ClaudeSource) Name() string { return "claude" }
 // real file mtime on every call (not a cached value) because Claude JSONL
 // files are appended to during a session — their mtime changes without
 // updating the parent directory's mtime.
-func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, error) {
+func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	if s.walker == nil {
 		return nil, nil
 	}
@@ -215,7 +215,7 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 }
 
 // Parse reads new JSONL lines from the session file starting at cursor c and
-// returns an incremental SourceUpdate. The cursor encodes a jsonl.Position
+// returns an incremental Update. The cursor encodes a jsonl.Position
 // plus cumulative subagent state; an empty cursor starts from the beginning.
 // A corrupt cursor, or a transcript truncated or replaced since the cursor
 // was taken, is re-read from the beginning as a Reset update.
@@ -225,13 +225,13 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 // confined to subagent files still yields an update for the parent.
 //
 // If a session-end marker for h.ID is found in the configured sessionEndDir,
-// the returned SourceUpdate has Terminal=true and EndReason populated.
+// the returned Update has Terminal=true and EndReason populated.
 //
-// If no new data is available, Parse returns a zero SourceUpdate and the
+// If no new data is available, Parse returns a zero Update and the
 // unchanged cursor.
-func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	if ctx.Err() != nil {
-		return source.SourceUpdate{}, c, ctx.Err()
+		return source.Update{}, c, ctx.Err()
 	}
 
 	cc, err := decodeCursor(c)
@@ -242,7 +242,7 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 
 	res, nextPos, rewritten, err := jsonl.ReadFrom(h.Path, cc.Position, jsonl.Options{})
 	if err != nil {
-		return source.SourceUpdate{}, c, err
+		return source.Update{}, c, err
 	}
 	if rewritten {
 		// The subagent state was derived from the old file too.
@@ -301,18 +301,18 @@ func parseParentLines(lines [][]byte, cc *claudeCursor, touched map[string]struc
 
 // buildUpdate converts the parent's parse result into the session update. It
 // is zero when the batch held neither data nor a compaction.
-func (s *ClaudeSource) buildUpdate(h source.SessionHandle, result *parseResult) source.SourceUpdate {
+func (s *Source) buildUpdate(h source.SessionHandle, result *parseResult) source.Update {
 	if !result.hasData {
 		if result.compactionDelta > 0 {
-			return source.SourceUpdate{
+			return source.Update{
 				SessionID:            cmp.Or(result.sessionID, h.ID),
 				CompactionCountDelta: result.compactionDelta,
 				LastActivityAt:       result.lastActivityAt,
 			}
 		}
-		return source.SourceUpdate{}
+		return source.Update{}
 	}
-	return source.SourceUpdate{
+	return source.Update{
 		SessionID:            cmp.Or(result.sessionID, h.ID),
 		Slug:                 result.slug,
 		Activity:             result.activity,
@@ -334,7 +334,7 @@ func (s *ClaudeSource) buildUpdate(h source.SessionHandle, result *parseResult) 
 
 // applySubagentsAndReset attaches the touched subagents' cumulative states to
 // update and flags a Reset, giving the update h's ID when either applies.
-func applySubagentsAndReset(h source.SessionHandle, update *source.SourceUpdate, cc *claudeCursor, touched map[string]struct{}, reset bool) {
+func applySubagentsAndReset(h source.SessionHandle, update *source.Update, cc *claudeCursor, touched map[string]struct{}, reset bool) {
 	if len(touched) > 0 {
 		if update.SessionID == "" {
 			update.SessionID = h.ID
@@ -351,7 +351,7 @@ func applySubagentsAndReset(h source.SessionHandle, update *source.SourceUpdate,
 // applyPendingTerminal marks update terminal when an end marker for h was
 // drained. Keyed by the handle, never by the records' sessionId: subagent
 // transcripts carry their parent's sessionId.
-func (s *ClaudeSource) applyPendingTerminal(h source.SessionHandle, update *source.SourceUpdate) {
+func (s *Source) applyPendingTerminal(h source.SessionHandle, update *source.Update) {
 	cm, ok := s.consumePendingTerminal(h.ID)
 	if !ok {
 		return
@@ -379,7 +379,7 @@ func mergeParents(prior, next map[string]string) map[string]string {
 // drainEndMarkers scans the sessionEndDir for end-marker files, validates
 // them, stores valid entries in pendingTerminals, and removes the files from
 // disk. It is a no-op if the dir was scanned less than 500ms ago.
-func (s *ClaudeSource) drainEndMarkers(now time.Time) {
+func (s *Source) drainEndMarkers(now time.Time) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -410,7 +410,7 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 
 // drainEndMarker reads, validates and removes the marker file at path,
 // recording a valid marker in pendingTerminals. Must be called with s.mu held.
-func (s *ClaudeSource) drainEndMarker(path string, maxSize int64, now time.Time) {
+func (s *Source) drainEndMarker(path string, maxSize int64, now time.Time) {
 	data, ok := readBoundedRegularFile(path, maxSize)
 	if !ok {
 		// Unreadable, not a regular file, or oversize. The name matched
@@ -467,7 +467,7 @@ func isEndMarkerName(name string) bool {
 // that looks like a hook-written marker. It loops ReadDir until the directory
 // is exhausted and collects names before any file is removed, so deleting
 // markers cannot disturb the directory iteration.
-func (s *ClaudeSource) listEndMarkerNames() []string {
+func (s *Source) listEndMarkerNames() []string {
 	f, err := os.Open(s.sessionEndDir)
 	if err != nil {
 		return nil
@@ -520,7 +520,7 @@ func removeIfRegular(path string) {
 // consumePendingTerminal retrieves and removes a pending terminal entry for
 // the given session ID. Returns the entry and true if found; zero value and
 // false otherwise.
-func (s *ClaudeSource) consumePendingTerminal(sessionID string) (consumedMarker, bool) {
+func (s *Source) consumePendingTerminal(sessionID string) (consumedMarker, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if cm, ok := s.pendingTerminals[sessionID]; ok {

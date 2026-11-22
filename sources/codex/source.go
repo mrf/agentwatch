@@ -130,18 +130,18 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 // rollout file; an empty cursor means start from zero. If the file was
 // truncated or replaced, or the cursor is unparseable, it is re-read from the
 // start as a Reset update.
-func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	res, nextPos, reset, err := jsonl.ReadFromCursor(h.Path, string(c), jsonl.Options{})
 	if err != nil {
-		return source.SourceUpdate{}, c, fmt.Errorf("codex: read %s: %w", h.Path, err)
+		return source.Update{}, c, fmt.Errorf("codex: read %s: %w", h.Path, err)
 	}
 	lines := res.Lines
 	next := source.Cursor(nextPos.Encode())
 
-	// No new complete lines: return the zero SourceUpdate the monitor treats
+	// No new complete lines: return the zero Update the monitor treats
 	// as "no new data" so idle polls don't refresh the session's liveness.
 	if len(lines) == 0 && !reset {
-		return source.SourceUpdate{SkippedLines: res.Skipped}, next, nil
+		return source.Update{SkippedLines: res.Skipped}, next, nil
 	}
 
 	// An unparseable cursor already reports reset, so its zero value is moot.
@@ -219,8 +219,8 @@ type accumulator struct {
 	lastActivityAt   time.Time
 }
 
-func (a *accumulator) toUpdate() source.SourceUpdate {
-	return source.SourceUpdate{
+func (a *accumulator) toUpdate() source.Update {
+	return source.Update{
 		Model:              a.model,
 		WorkingDir:         a.workingDir,
 		Activity:           a.activity,
