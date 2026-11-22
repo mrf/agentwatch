@@ -9,7 +9,7 @@ A `Source` feeds session data into the monitor. Implement the `source.Source` in
 type Source interface {
     Name() string
     Discover(ctx context.Context) ([]SessionHandle, error)
-    Parse(ctx context.Context, h SessionHandle, c Cursor) (SourceUpdate, Cursor, error)
+    Parse(ctx context.Context, h SessionHandle, c Cursor) (Update, Cursor, error)
 }
 ```
 
@@ -46,26 +46,26 @@ func (s *MySource) Discover(ctx context.Context) ([]source.SessionHandle, error)
 
 Read new data for the session identified by `h`, starting from cursor `c`. Return the incremental update, the next cursor position, and any error.
 
-If there is no new data, return a zero `SourceUpdate` (one where `SessionID == ""`), the same cursor, and a nil error:
+If there is no new data, return a zero `Update` (one where `SessionID == ""`), the same cursor, and a nil error:
 
 ```go
 func (s *MySource) Parse(
     ctx context.Context,
     h source.SessionHandle,
     c source.Cursor,
-) (source.SourceUpdate, source.Cursor, error) {
+) (source.Update, source.Cursor, error) {
 
     offset, _ := strconv.ParseInt(string(c), 10, 64)
 
     data, newOffset, err := readNewBytes(h.Path, offset)
     if err != nil {
-        return source.SourceUpdate{}, c, err
+        return source.Update{}, c, err
     }
     if len(data) == 0 {
-        return source.SourceUpdate{}, c, nil  // no new data
+        return source.Update{}, c, nil  // no new data
     }
 
-    update := source.SourceUpdate{
+    update := source.Update{
         SessionID:          h.ID,
         Activity:           session.ActivityWorking,
         MessageCountDelta:  1,
@@ -99,12 +99,12 @@ cursor = source.Cursor(b)
 
 A zero cursor (`""`) means no prior position — the source should start from the beginning of the session.
 
-## SourceUpdate Fields
+## Update Fields
 
-`SourceUpdate` carries incremental data. Most fields are optional — only set the ones your source actually knows.
+`Update` carries incremental data. Most fields are optional — only set the ones your source actually knows.
 
 ```go
-type SourceUpdate struct {
+type Update struct {
     SessionID string           // required: identifies which session this update belongs to
 
     Activity  session.Activity // "idle" | "working" | "waiting" | "terminal"
@@ -141,7 +141,7 @@ type SourceUpdate struct {
 Set `Terminal: true` when the session has ended. The monitor transitions the session to `LifecycleTerminal` and emits an `EventTerminal` lifecycle event. After the configured retention window the session is removed.
 
 ```go
-update := source.SourceUpdate{
+update := source.Update{
     SessionID: h.ID,
     Terminal:  true,
     EndReason: "session completed",
@@ -153,14 +153,14 @@ update := source.SourceUpdate{
 
 Return an error from `Discover` or `Parse` to signal a failure. The monitor logs it, records a health failure against the source, and continues polling. Your source is responsible for resetting its own internal state on the next successful call.
 
-Do not return an error when there is simply no new data — return a zero `SourceUpdate` and the same cursor instead.
+Do not return an error when there is simply no new data — return a zero `Update` and the same cursor instead.
 
-The cursor you return is persisted **even when you also return an error** or a zero `SourceUpdate`. The monitor never inspects or compares it, so the cursor is how you choose between the two behaviors:
+The cursor you return is persisted **even when you also return an error** or a zero `Update`. The monitor never inspects or compares it, so the cursor is how you choose between the two behaviors:
 
 - **Skip the input** (an unparseable file, a batch holding only records you do not report): return the *advanced* cursor. The monitor will not re-read it. For an error, the failure is counted once against source health, and health recovers on the next clean poll.
 - **Retry the input** (a transient read failure): return the cursor you were *given* (`c`) with the error.
 
-A zero `SourceUpdate` never creates a session or refreshes `LastDataReceivedAt`; only a non-zero update counts as data for stale detection.
+A zero `Update` never creates a session or refreshes `LastDataReceivedAt`; only a non-zero update counts as data for stale detection.
 
 ## Using the Source Registry
 

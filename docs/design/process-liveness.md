@@ -24,7 +24,7 @@ Signing off means the first implementation commit edits these, then code follows
    ("do not promote an internal package speculatively") and plan §12.12 argue the shared
    code starts as `internal/proclive`. No public surface is added by this doc.
 4. **Plan §4.5 / ADR 0005 — no new transition, one clarification.** Process exit is
-   reported as `SourceUpdate{Terminal: true, EndReason: "process exited"}`, which is the
+   reported as `Update{Terminal: true, EndReason: "process exited"}`, which is the
    existing row "Active | source update has `Terminal=true` | terminal | terminal". But the
    table is silent on a `Terminal=true` update for a session that is *already* terminal,
    and the code resumes it: in PollOnce's `switch` the
@@ -41,7 +41,7 @@ Signing off means the first implementation commit edits these, then code follows
    by the exit report. (Alternative in open question 2.)
 5. **Design rule 3 (no PID in public v1 state).** Kept: PIDs, process start times and
    namespace ids live only in unexported source fields (§5). Not in `SessionHandle`
-   (public, JSON-tagged), `SourceUpdate`, `SessionState`, cursors, `EndReason` or health
+   (public, JSON-tagged), `Update`, `State`, cursors, `EndReason` or health
    strings.
 6. **Design rule 2 (no path defaults in monitor).** Kept: the monitor gains nothing.
    Each source gets an opt-in option whose path the consumer/example chooses.
@@ -177,12 +177,12 @@ macOS gets its own ticket once someone can run a corpus check there.
 
 - PIDs, `procStart`, `pidDomain`, fd targets live in an unexported per-source map keyed by
   session ID, pruned when a handle is no longer discovered.
-- Never put in `SessionHandle`, `SourceUpdate`, cursors, `EndReason` (fixed string
+- Never put in `SessionHandle`, `Update`, cursors, `EndReason` (fixed string
   `"process exited"`), or health errors (wrap with a category, no paths/PIDs — rule 10).
 - **Never read argv beyond argv0.** Claude Code's argv carries the full prompt text
   (observed while surveying; this is what tripped the first survey script). The pid file's
   `cwd`, `name`, `tmux` fields are not read into state.
-- Add a privacy test: an exit report's `SessionState` JSON contains no PID digits from the
+- Add a privacy test: an exit report's `State` JSON contains no PID digits from the
   fixture and no fixture path.
 
 ## 6. Cost

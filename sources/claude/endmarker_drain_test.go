@@ -9,15 +9,15 @@ import (
 	"time"
 )
 
-func newDrainSource(t *testing.T, markerDir string) *ClaudeSource {
+func newDrainSource(t *testing.T, markerDir string) *Source {
 	t.Helper()
 	src, err := New(WithSessionEndDir(markerDir))
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	cs, ok := src.(*ClaudeSource)
+	cs, ok := src.(*Source)
 	if !ok {
-		t.Fatalf("New returned %T, want *ClaudeSource", src)
+		t.Fatalf("New returned %T, want *Source", src)
 	}
 	return cs
 }

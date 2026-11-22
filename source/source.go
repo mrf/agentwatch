@@ -26,19 +26,19 @@ type Source interface {
 
 	// Parse reads new data for the session identified by h, starting from
 	// cursor c. It returns the parsed update, the next cursor position, and
-	// any error. If no new data is available, it returns a zero SourceUpdate
+	// any error. If no new data is available, it returns a zero Update
 	// and the same cursor.
 	//
 	// The monitor persists the returned cursor on every call — with data,
-	// with a zero SourceUpdate, and alongside a non-nil error — and never
+	// with a zero Update, and alongside a non-nil error — and never
 	// inspects or compares it. The cursor is therefore the source's only way
 	// to control re-reads:
 	//   - To consume input without reporting it (progress-only batches, an
-	//     unparseable file), return the advanced cursor. A zero SourceUpdate
+	//     unparseable file), return the advanced cursor. A zero Update
 	//     does not create or refresh a session.
 	//   - To retry the same input on the next poll (a transient failure),
 	//     return the cursor you were given, c, along with the error.
-	Parse(ctx context.Context, h SessionHandle, c Cursor) (SourceUpdate, Cursor, error)
+	Parse(ctx context.Context, h SessionHandle, c Cursor) (Update, Cursor, error)
 }
 
 // SessionHandle is a lightweight descriptor returned by Discover.
@@ -51,10 +51,10 @@ type SessionHandle struct {
 	Source     string    `json:"source"`
 }
 
-// SourceUpdate carries incremental session data returned by Parse.
+// Update carries incremental session data returned by Parse.
 // Delta fields (MessageCountDelta, ToolCallCountDelta) represent the change
 // since the previous Parse call; the monitor accumulates them (see Reset).
-type SourceUpdate struct {
+type Update struct {
 	SessionID string `json:"sessionId"`
 	Slug      string `json:"slug,omitempty"`
 

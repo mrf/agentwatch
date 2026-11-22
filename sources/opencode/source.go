@@ -158,7 +158,7 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 // a zero update so the monitor can let it go stale, and an archived session
 // is reported terminal once. A cursor that cannot be decoded is discarded and
 // the session is re-read from scratch as a Reset update.
-func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	cur, err := decodeCursor(string(c))
 	reset := err != nil
 	if reset {
@@ -170,19 +170,19 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 
 	db, err := s.acquireLocked()
 	if err != nil || db == nil {
-		return source.SourceUpdate{}, c, err
+		return source.Update{}, c, err
 	}
 
 	result, newCur, err := queryParseData(ctx, db, h.ID, cur)
 	if err != nil {
 		_ = s.closeLocked()
-		return source.SourceUpdate{}, c, err
+		return source.Update{}, c, err
 	}
 	if !result.changed {
-		return source.SourceUpdate{}, c, nil
+		return source.Update{}, c, nil
 	}
 
-	update := source.SourceUpdate{
+	update := source.Update{
 		SessionID:          h.ID,
 		Slug:               result.slug,
 		Model:              result.model,

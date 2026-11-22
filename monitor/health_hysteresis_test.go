@@ -59,7 +59,7 @@ func (p *healthPoller) pollDiscoverError() monitor.Health {
 func (p *healthPoller) pollParseError(ids ...string) monitor.Health {
 	p.t.Helper()
 	for i := 0; i < len(ids); i++ {
-		p.src.QueueParseResult(ids[i], source.SourceUpdate{}, "", errors.New("bad line"))
+		p.src.QueueParseResult(ids[i], source.Update{}, "", errors.New("bad line"))
 	}
 	return p.poll()
 }

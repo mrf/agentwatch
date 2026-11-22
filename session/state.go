@@ -50,8 +50,8 @@ type SubagentState struct {
 	CompletedAt   time.Time `json:"completedAt,omitempty"`
 }
 
-// SessionState is the public snapshot of a monitored agent session.
-type SessionState struct {
+// State is the public snapshot of a monitored agent session.
+type State struct {
 	ID     string `json:"id"`
 	Source string `json:"source"`
 	Slug   string `json:"slug,omitempty"`
@@ -93,7 +93,7 @@ func ComputeContextUtilization(contextTokens, maxContextTokens int) float64 {
 
 // Clone returns a deep copy of s. Callers may mutate the copy without
 // affecting the original.
-func (s SessionState) Clone() SessionState {
+func (s State) Clone() State {
 	c := s
 	if s.CompletedAt != nil {
 		t := *s.CompletedAt

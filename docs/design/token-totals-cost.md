@@ -20,7 +20,7 @@ the tree at `4fc47df`.
 
 Signing off means the first implementation commit makes these edits. Code comes after.
 
-1. **Plan §4.4 (`SessionState`)** gains `Usage session.TokenUsage` and
+1. **Plan §4.4 (`State`)** gains `Usage session.TokenUsage` and
    `SubagentState.Usage`. §4.4 lists `BurnRatePerMinute` as "removed from public state",
    and §13 Q5 says burn-rate metrics are "app-side until proven otherwise". Totals are not
    a rate. They are the input a consumer needs to derive one, and only the source can
@@ -28,7 +28,7 @@ Signing off means the first implementation commit makes these edits. Code comes 
    "Cumulative token usage is core; rates, budgets and cost are derived by consumers."
    There is precedent: `CompactionCount` was in the same "not core" list and has since
    shipped (`session/state.go`).
-2. **Plan §4.1 / `SourceUpdate`** gains `UsageDelta session.TokenUsage`, which `Reset`
+2. **Plan §4.1 / `Update`** gains `UsageDelta session.TokenUsage`, which `Reset`
    covers. The `Reset` doc comment (`source/source.go`) currently says "the three count
    deltas". That wording becomes "the count and usage deltas".
 3. **`docs/source-implementation.md` "Delta vs absolute fields"** says token counts are
@@ -49,9 +49,9 @@ Signing off means the first implementation commit makes these edits. Code comes 
 
 ### 1.1 Core fields
 
-`session.SessionState` (`session/state.go`) has `ContextTokens`, `OutputTokens`,
+`session.State` (`session/state.go`) has `ContextTokens`, `OutputTokens`,
 `TokenEstimated`, `MaxContextTokens`, `ContextUtilization` and `Model`. `SubagentState` has
-`Model`, `ContextTokens` and `OutputTokens`. `source.SourceUpdate` (`source/source.go`)
+`Model`, `ContextTokens` and `OutputTokens`. `source.Update` (`source/source.go`)
 carries the same fields plus `HasTokens`, which fqq added.
 
 How `monitor.applyUpdate` (`monitor/monitor.go`) applies them:
@@ -147,11 +147,11 @@ type TokenUsage struct {
 	Output     int64 `json:"output"`
 }
 
-SessionState.Usage  TokenUsage `json:"usage"`           // main thread only
+State.Usage  TokenUsage `json:"usage"`           // main thread only
 SubagentState.Usage TokenUsage `json:"usage,omitzero"`
 
 // source
-SourceUpdate.UsageDelta session.TokenUsage `json:"usageDelta,omitzero"`
+Update.UsageDelta session.TokenUsage `json:"usageDelta,omitzero"`
 ```
 
 - **Why `int64`:** cache reads re-count the whole context on every turn, so a long session
@@ -177,7 +177,7 @@ SourceUpdate.UsageDelta session.TokenUsage `json:"usageDelta,omitzero"`
 - **Subagents:** `Usage` covers the main thread only. Each `SubagentState.Usage` is the
   subagent's own cumulative total, assigned absolutely by the source through the
   `subagentEntry` cursor state the source already keeps. A pure helper
-  `func (s SessionState) TotalUsage() TokenUsage` sums the main thread and its subagents,
+  `func (s State) TotalUsage() TokenUsage` sums the main thread and its subagents,
   so consumers do not each reinvent it. `overlaySubagent` overwrites `Usage` when the
   incoming value is non-zero, which is the same rule its other fields follow.
 - `Clone` stays shallow-safe, because `TokenUsage` is a value type.
@@ -257,8 +257,8 @@ own reset-usage test (§6).
 
 ## 5. Wire format and compatibility
 
-- **Additive.** `SessionState` JSON gains `"usage":{…}` (always present), and subagents
-  gain `"usage"` when non-zero. httpapi and wsapi serialize `SessionState` as-is
+- **Additive.** `State` JSON gains `"usage":{…}` (always present), and subagents
+  gain `"usage"` when non-zero. httpapi and wsapi serialize `State` as-is
   (`transport/wsapi/policy.go` `applyPolicyStates`), so nothing changes in the transports.
   Older Go and JS clients ignore the unknown key.
 - **ws-resume-filters.md:** usage changes ride `EventDelta` like any field. A field filter,
@@ -297,7 +297,7 @@ own reset-usage test (§6).
 1. **Pi cost-shape fix** (the finding). It is independent and should land first.
 2. **ugx docs:** rewrite the gauge semantics in `source-implementation.md` and the plan
    §4.4 note. Docs only.
-3. **Core:** `session.TokenUsage`, `Usage` fields, `TotalUsage`, `SourceUpdate.UsageDelta`,
+3. **Core:** `session.TokenUsage`, `Usage` fields, `TotalUsage`, `Update.UsageDelta`,
    `applyUpdate` and `overlaySubagent`, the monitor tests, the `CheckRewriteResets`
    extension, and the mock source. Sources report nothing yet, so all totals stay zero.
 4. **claude** (dedupe plus cursor fields, main thread and subagents).

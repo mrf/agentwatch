@@ -27,7 +27,7 @@ func TestSnapshotWithSeq_SeqMatchesLastDeliveredEvent(t *testing.T) {
 	clk := testClock()
 	src := mock.New(mock.WithName("test"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test", StartedAt: clk.Now()}})
-	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Activity: session.ActivityWorking}, "c1")
+	src.AddUpdate("s1", source.Update{SessionID: "s1", Activity: session.ActivityWorking}, "c1")
 
 	sink := &recordingSink{}
 	m, err := monitor.New(monitor.WithSources(src), monitor.WithClock(clk), monitor.WithSink(sink))
@@ -59,7 +59,7 @@ func TestSnapshotWithSeq_SnapshotInSinkReflectsDeliveredEvent(t *testing.T) {
 	clk := testClock()
 	src := mock.New(mock.WithName("test"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test", StartedAt: clk.Now()}})
-	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Activity: session.ActivityWorking}, "c1")
+	src.AddUpdate("s1", source.Update{SessionID: "s1", Activity: session.ActivityWorking}, "c1")
 
 	var m *monitor.Monitor
 	checked := 0

@@ -78,8 +78,8 @@ type accumulator struct {
 	lastActivityAt time.Time
 }
 
-func (a *accumulator) toUpdate() source.SourceUpdate {
-	return source.SourceUpdate{
+func (a *accumulator) toUpdate() source.Update {
+	return source.Update{
 		SessionID:          a.sessionID,
 		Model:              a.model,
 		WorkingDir:         a.workingDir,

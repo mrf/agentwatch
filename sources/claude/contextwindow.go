@@ -21,10 +21,10 @@ var defaultContextWindows = map[string]int{
 }
 
 // WithContextWindows adds or overrides entries in the model-to-context-window
-// table used to fill SourceUpdate.MaxContextTokens. Keys are exact model IDs.
+// table used to fill Update.MaxContextTokens. Keys are exact model IDs.
 // Entries merge over the defaults; the map is copied.
 func WithContextWindows(windows map[string]int) Option {
-	return func(s *ClaudeSource) {
+	return func(s *Source) {
 		if s.contextWindows == nil {
 			s.contextWindows = make(map[string]int, len(windows))
 		}
@@ -33,7 +33,7 @@ func WithContextWindows(windows map[string]int) Option {
 }
 
 // contextWindow returns the context window for model, or 0 if unknown.
-func (s *ClaudeSource) contextWindow(model string) int {
+func (s *Source) contextWindow(model string) int {
 	if n, ok := s.contextWindows[model]; ok {
 		return n
 	}

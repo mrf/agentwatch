@@ -34,7 +34,7 @@ All in `sources/claude`:
 | `accumulateSubagent` (`subagents.go`): counts are added, `StartedAt` keeps the earliest value, terminal stays terminal | `MessageCount`, `ToolCallCount`, `StartedAt`, `Activity`, but only if the entry is touched again |
 | `knownParents` (`subagents.go`) → `parseLinesWithParents` → `checkSubagentCompletion` (`parser.go`) | `ParentID`. Only matters before completion: a parent `tool_result` is consumed once and the parent `Position` moves past it |
 | `pruneParents` (`subagents.go`, from agentwatch-fyv) | `Activity == terminal`. If the entry is missing, the zero value isn't terminal, so the `Parents` link is never pruned |
-| `subagentStates(touched)` → `SourceUpdate.Subagents` (`source.go` `Parse`) | the full cumulative `State`, because that is what gets emitted |
+| `subagentStates(touched)` → `Update.Subagents` (`source.go` `Parse`) | the full cumulative `State`, because that is what gets emitted |
 
 On the monitor side (`monitor.go`), a non-Reset update goes through `mergeSubagents`, then
 `overlaySubagent`. **Only non-zero incoming fields overwrite**, and subagents missing from the
@@ -125,7 +125,7 @@ another route. That is a one-line addition to that doc, not part of this one.
   that doc). The worst case on this machine is about 136 KB for one session, and the total of
   all subagent entries is also bounded by 323 × 420 B. That is negligible. Neither A nor B
   forces a `Reset` on restore.
-- **Monitor-side state grows at the same rate, and it's public.** `session.SessionState.Subagents`
+- **Monitor-side state grows at the same rate, and it's public.** `session.State.Subagents`
   keeps every subagent ever seen (`mergeSubagents` keeps the ones an update omits). It is
   cloned and sent through the transports with the session's state. Compacting the cursor
   doesn't bound it, and bounding it would change public behaviour. I haven't measured it, and
@@ -167,4 +167,4 @@ Under B: a single ticket covering §6 tests 1–4 and the slimming in `putSubage
    recommend it: it saves little and fails silently.
 3. Can you run this, so the per-session distribution backs up §2?
    `for d in ~/.claude/projects/*/*/subagents; do ls "$d"/agent-*.jsonl 2>/dev/null | wc -l; done | sort -n | tail -5`
-4. Should monitor-side `SessionState.Subagents` growth (§5) get its own design ticket?
+4. Should monitor-side `State.Subagents` growth (§5) get its own design ticket?

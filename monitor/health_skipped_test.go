@@ -23,7 +23,7 @@ func newSkippedMonitor(t *testing.T, src *mock.Source) *monitor.Monitor {
 	return m
 }
 
-// TestHealth_SkippedLinesAccumulate verifies that SourceUpdate.SkippedLines
+// TestHealth_SkippedLinesAccumulate verifies that Update.SkippedLines
 // is summed across polls and sessions into Health.SkippedLines without
 // affecting status.
 func TestHealth_SkippedLinesAccumulate(t *testing.T) {
@@ -33,9 +33,9 @@ func TestHealth_SkippedLinesAccumulate(t *testing.T) {
 		{ID: "s1", Source: "claude"},
 		{ID: "s2", Source: "claude"},
 	})
-	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Activity: session.ActivityWorking, SkippedLines: 2}, "c1")
-	src.AddUpdate("s1", source.SourceUpdate{SessionID: "s1", Activity: session.ActivityWorking, SkippedLines: 1}, "c2")
-	src.AddUpdate("s2", source.SourceUpdate{SessionID: "s2", Activity: session.ActivityWorking, SkippedLines: 4}, "c1")
+	src.AddUpdate("s1", source.Update{SessionID: "s1", Activity: session.ActivityWorking, SkippedLines: 2}, "c1")
+	src.AddUpdate("s1", source.Update{SessionID: "s1", Activity: session.ActivityWorking, SkippedLines: 1}, "c2")
+	src.AddUpdate("s2", source.Update{SessionID: "s2", Activity: session.ActivityWorking, SkippedLines: 4}, "c1")
 
 	m := newSkippedMonitor(t, src)
 	ctx := context.Background()
@@ -66,7 +66,7 @@ func TestHealth_SkippedLinesWithoutSessionID(t *testing.T) {
 	t.Parallel()
 	src := mock.New(mock.WithName("codex"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "codex"}})
-	src.AddUpdate("s1", source.SourceUpdate{SkippedLines: 3}, "c1")
+	src.AddUpdate("s1", source.Update{SkippedLines: 3}, "c1")
 
 	m := newSkippedMonitor(t, src)
 	if err := m.PollOnce(context.Background()); err != nil {

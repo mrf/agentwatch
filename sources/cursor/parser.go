@@ -13,8 +13,8 @@ type accumulator struct {
 	messageDelta int
 }
 
-func (a *accumulator) toUpdate() source.SourceUpdate {
-	return source.SourceUpdate{
+func (a *accumulator) toUpdate() source.Update {
+	return source.Update{
 		Activity:          a.activity,
 		MessageCountDelta: a.messageDelta,
 	}

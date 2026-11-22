@@ -27,7 +27,7 @@ func pollStartedAt(t *testing.T, handleStart time.Time, batches []time.Time) []t
 
 	got := make([]time.Time, 0, len(batches))
 	for i := 0; i < len(batches); i++ {
-		src.AddUpdate("s1", source.SourceUpdate{
+		src.AddUpdate("s1", source.Update{
 			SessionID:         "s1",
 			Activity:          session.ActivityWorking,
 			MessageCountDelta: 1,

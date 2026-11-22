@@ -1,4 +1,4 @@
-# Bounding the public `SessionState.Subagents` list (agentwatch-901)
+# Bounding the public `State.Subagents` list (agentwatch-901)
 
 Status: **proposal — awaiting Mark's review. No implementation until signed off.**
 Issue: agentwatch-901. Grounded in the tree at `1555151`.
@@ -15,12 +15,12 @@ per-session distribution (open question 2) shows a long tail past N≈300.
 Under the recommendation there are none: no code, plan, ADR or public-package edit. If Mark
 picks B or C (§3), sign-off would require:
 
-- **`session` is a public package, and `SessionState.Subagents` is a public field**
+- **`session` is a public package, and `State.Subagents` is a public field**
   (`session/state.go`, plan §4 struct at `agentwatch-plan.md:287`). B changes its semantics from
   cumulative to live-plus-recent; C adds fields. Both are public-API changes.
 - **`docs/migration-from-agent-racer.md:29`** lists `Subagents` among the "unchanged fields
   (same name and semantics)". B contradicts that line and would need a note there.
-- **Plan §4.5 / `source.SourceUpdate.Reset`** (`agentwatch-plan.md:188`, `source/source.go`
+- **Plan §4.5 / `source.Update.Reset`** (`agentwatch-plan.md:188`, `source/source.go`
   `Reset`): "`Subagents` replaces the session's subagent list". B must keep this true, so a
   Reset-rebuilt list is also filtered (§3, B).
 - **CLAUDE.md design rules** 1, 3 and 6 are unaffected: no new concepts, no private data, and
@@ -38,7 +38,7 @@ picks B or C (§3), sign-off would require:
   after `completionRetention` (default 30 s, `monitor/options.go`; sweep in `PollOnce`). So the
   bound today is "subagents spawned by one session", and a long-lived or resumed Claude
   session is the only way to get a large N.
-- **Fan-out.** `Subagents` is a field of `SessionState`, so every `EventDelta` (`monitor/events.go`)
+- **Fan-out.** `Subagents` is a field of `State`, so every `EventDelta` (`monitor/events.go`)
   carries the session's whole subagent list in `Updates`, and `EventSnapshot` carries it for
   every session. There is no per-subagent delta. A delta is emitted only for a session with new
   data (`update.SessionID == ""` is skipped), and the default poll interval is 2 s
@@ -56,7 +56,7 @@ picks B or C (§3), sign-off would require:
 
 ## 2. Measurement
 
-A throwaway test in package `monitor` (not committed, deleted) built a `SessionState` with N
+A throwaway test in package `monitor` (not committed, deleted) built a `State` with N
 completed subagents, each with a 17-char ID, a 28-char `toolu_` parent ID, slug, model,
 timestamps and counts. It then timed 2,000 iterations of each step. WSL2, one run, no
 isolation from other load, so read the times as order of magnitude.
@@ -86,7 +86,7 @@ this machine.
 
 Not measured: wsapi compression (no compression option appears in `transport/wsapi`, so I
 assume the library default; UNVERIFIED), JSON consumers' parse cost, and the persisted
-checkpoint size (`persistence.md` row C stores `SessionState`; at N=323 it is about 126 KB per
+checkpoint size (`persistence.md` row C stores `State`; at N=323 it is about 126 KB per
 session, bounded by the same number).
 
 ## 3. Options
@@ -94,7 +94,7 @@ session, bounded by the same number).
 | | Scheme | Bounds | Public change | Verdict |
 |---|---|---|---|---|
 | **A** | Do nothing (recommended) | no | none | negligible at realistic N |
-| B | Drop a completed subagent from `SessionState.Subagents` once it has been terminal for a retention period (mirror `completionRetention`) | live subagents plus recent completions | semantics of an existing public field | see §4: needs an ID tombstone |
+| B | Drop a completed subagent from `State.Subagents` once it has been terminal for a retention period (mirror `completionRetention`) | live subagents plus recent completions | semantics of an existing public field | see §4: needs an ID tombstone |
 | C | Cap the list at K newest, add summary fields (for example `SubagentsCompleted int`) | K | adds public fields, changes list semantics | works, but two changes in one |
 | D | Send only changed subagents in `EventDelta`, full list only in snapshots | the wire only; state stays O(N) | protocol: `Updates` stops being full per-session state | rejected: breaks every consumer that replaces a session by its delta, and `ws-resume-filters.md` assumes full states |
 

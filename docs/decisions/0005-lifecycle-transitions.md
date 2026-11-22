@@ -64,7 +64,7 @@ transition requires updating this table before implementation begins.
 |---|---|---|---|
 | Untracked | Source discovers handle; parse result is not stale | `active` | `discovered` |
 | `active` | Parse returns new data | `active` | `updated` |
-| `active` | `SourceUpdate.Terminal == true` | `terminal` | `terminal` |
+| `active` | `Update.Terminal == true` | `terminal` | `terminal` |
 | `active` | No new data past stale threshold | `terminal` | `stale` |
 | `terminal` | Source returns new data after terminal | `active` | `resumed` |
 | `terminal` | Retention window expires | Removed from store | `removed` |
@@ -84,7 +84,7 @@ transition requires updating this table before implementation begins.
 - **State commits** happen before the corresponding `LifecycleEvent` is
   delivered to sinks. Sinks observe the new state, not the old state.
 - **`LifecycleEvent.Reason`** carries a human-readable explanation for
-  `terminal` (from `SourceUpdate.EndReason`) and `stale` (timeout duration).
+  `terminal` (from `Update.EndReason`) and `stale` (timeout duration).
   It is empty for `discovered`, `updated`, and `resumed`.
 
 ## Consequences

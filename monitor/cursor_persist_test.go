@@ -35,7 +35,7 @@ func TestPollOnce_EmptyUpdatePersistsAdvancedCursor(t *testing.T) {
 	src := mock.New(mock.WithName("test"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
 	// Zero update (SessionID == "") but the cursor advanced to B.
-	src.AddUpdate("s1", source.SourceUpdate{}, "B")
+	src.AddUpdate("s1", source.Update{}, "B")
 
 	m := newCursorTestMonitor(t, src)
 	for i := 0; i < 2; i++ {
@@ -63,7 +63,7 @@ func TestPollOnce_ParseErrorPersistsReturnedCursor(t *testing.T) {
 	t.Parallel()
 	src := mock.New(mock.WithName("test"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
-	src.QueueParseResult("s1", source.SourceUpdate{}, "past-bad-input", errors.New("bad file"))
+	src.QueueParseResult("s1", source.Update{}, "past-bad-input", errors.New("bad file"))
 
 	m := newCursorTestMonitor(t, src)
 	for i := 0; i < 2; i++ {
@@ -86,8 +86,8 @@ func TestPollOnce_ParseErrorReturningInputCursorRetries(t *testing.T) {
 	src := mock.New(mock.WithName("test"))
 	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
 	// A source that wants a retry returns the cursor it was given.
-	src.QueueParseResult("s1", source.SourceUpdate{}, "A", nil)
-	src.QueueParseResult("s1", source.SourceUpdate{}, "A", errors.New("transient"))
+	src.QueueParseResult("s1", source.Update{}, "A", nil)
+	src.QueueParseResult("s1", source.Update{}, "A", errors.New("transient"))
 
 	m := newCursorTestMonitor(t, src)
 	for i := 0; i < 3; i++ {
@@ -111,7 +111,7 @@ type countingSource struct {
 	parseErrors atomic.Int32
 }
 
-func (c *countingSource) Parse(ctx context.Context, h source.SessionHandle, cur source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (c *countingSource) Parse(ctx context.Context, h source.SessionHandle, cur source.Cursor) (source.Update, source.Cursor, error) {
 	u, next, err := c.Source.Parse(ctx, h, cur)
 	if err != nil {
 		c.parseErrors.Add(1)

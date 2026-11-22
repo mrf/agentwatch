@@ -10,10 +10,10 @@ import (
 	"github.com/mrf/agentwatch/source"
 )
 
-// counts are the accumulating fields of a SourceUpdate.
+// counts are the accumulating fields of an Update.
 type counts struct{ msgs, tools, compactions int }
 
-func countsOf(u source.SourceUpdate) counts {
+func countsOf(u source.Update) counts {
 	return counts{u.MessageCountDelta, u.ToolCallCountDelta, u.CompactionCountDelta}
 }
 
@@ -34,7 +34,7 @@ func CheckRewriteResets(t *testing.T, src source.Source, h source.SessionHandle,
 			t.Fatal(err)
 		}
 	}
-	parse := func(step string, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor) {
+	parse := func(step string, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor) {
 		t.Helper()
 		u, next, err := src.Parse(ctx, h, c)
 		if err != nil {
@@ -50,7 +50,7 @@ func CheckRewriteResets(t *testing.T, src source.Source, h source.SessionHandle,
 		u, _ := parse("fresh", fh, "")
 		return countsOf(u)
 	}
-	wantReset := func(step string, u source.SourceUpdate, want counts) {
+	wantReset := func(step string, u source.Update, want counts) {
 		t.Helper()
 		if !u.Reset {
 			t.Errorf("%s: Reset = false, want true", step)
@@ -109,7 +109,7 @@ type CorruptingSource struct {
 func (s *CorruptingSource) SetCorrupt(on bool) { s.corrupt.Store(on) }
 
 // Parse implements source.Source.
-func (s *CorruptingSource) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (s *CorruptingSource) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	if s.corrupt.Load() {
 		c = "{corrupt"
 	}

@@ -47,7 +47,7 @@ enriched assistant records, so Claude's `Working` is reliable at this point.
 
 | | Option | Rule 5 (opaque cursor) | Rule 6 (commit before events) | §4.5 table | Fixes measured case? |
 |---|---|---|---|---|---|
-| a | `SourceUpdate.Heartbeat bool`: source sets it on advanced-but-unreportable batches; monitor bumps `LastDataReceivedAt`, no event | ok | ok | no new row | ≤ 2 / 487 |
+| a | `Update.Heartbeat bool`: source sets it on advanced-but-unreportable batches; monitor bumps `LastDataReceivedAt`, no event | ok | ok | no new row | ≤ 2 / 487 |
 | b | Sources emit `LastActivityAt`-only updates | ok | ok | no new row, but emits `updated` + delta per bookkeeping batch | ≤ 2 / 487 |
 | c | Monitor-side "cursor advanced" via opaque `Equal`/`Advanced` method | bends it (monitor reasons about cursor progress), API change on `Source` | ok | no new row | ≤ 2 / 487 |
 | d | Parser treats specific kinds (`queue-operation`, `attachment`, `system/turn_duration`) as data | ok | ok | no new row; emits events and may perturb Activity/counts | ≤ 2 / 487 |

@@ -26,7 +26,7 @@ type discoverResult struct {
 
 // parseResult is one scripted response for Parse.
 type parseResult struct {
-	update source.SourceUpdate
+	update source.Update
 	cursor source.Cursor
 	err    error
 }
@@ -85,7 +85,7 @@ func WithDiscoverError(err error) Option {
 
 // WithParseResult queues a Parse result for the given sessionID.
 // Multiple calls for the same sessionID append results in order.
-func WithParseResult(sessionID string, update source.SourceUpdate, cursor source.Cursor, err error) Option {
+func WithParseResult(sessionID string, update source.Update, cursor source.Cursor, err error) Option {
 	return func(s *Source) {
 		s.parseQueues[sessionID] = append(s.parseQueues[sessionID], parseResult{
 			update: update,
@@ -97,7 +97,7 @@ func WithParseResult(sessionID string, update source.SourceUpdate, cursor source
 
 // WithDefaultParse sets a fallback Parse result used for any session whose
 // scripted queue is empty. The default is not consumed — it repeats on every call.
-func WithDefaultParse(update source.SourceUpdate, cursor source.Cursor, err error) Option {
+func WithDefaultParse(update source.Update, cursor source.Cursor, err error) Option {
 	return func(s *Source) {
 		s.defaultParse = &parseResult{update: update, cursor: cursor, err: err}
 	}
@@ -132,8 +132,8 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 
 // Parse implements source.Source. It dequeues the next scripted result for
 // h.ID. If none remains it falls back to the default result, or returns a
-// zero SourceUpdate with the incoming cursor unchanged.
-func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+// zero Update with the incoming cursor unchanged.
+func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -147,7 +147,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	if s.defaultParse != nil {
 		return s.defaultParse.update, s.defaultParse.cursor, s.defaultParse.err
 	}
-	return source.SourceUpdate{}, c, nil
+	return source.Update{}, c, nil
 }
 
 // DiscoverCallCount returns the number of times Discover has been called.
@@ -183,7 +183,7 @@ func (s *Source) QueueHandles(handles ...source.SessionHandle) {
 
 // QueueParseResult enqueues a Parse result for sessionID.
 // Safe to call after construction (runtime mutation).
-func (s *Source) QueueParseResult(sessionID string, update source.SourceUpdate, cursor source.Cursor, err error) {
+func (s *Source) QueueParseResult(sessionID string, update source.Update, cursor source.Cursor, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.parseQueues[sessionID] = append(s.parseQueues[sessionID], parseResult{
@@ -213,7 +213,7 @@ func (s *Source) SetHandles(handles []source.SessionHandle) {
 
 // AddUpdate queues a Parse result for the given sessionID with no error.
 // Convenience method for tests.
-func (s *Source) AddUpdate(sessionID string, update source.SourceUpdate, cursor source.Cursor) {
+func (s *Source) AddUpdate(sessionID string, update source.Update, cursor source.Cursor) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.parseQueues[sessionID] = append(s.parseQueues[sessionID], parseResult{

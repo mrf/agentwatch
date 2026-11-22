@@ -19,7 +19,7 @@ func writeMarker(t *testing.T, dir, sessionID string) {
 	}
 }
 
-func pendingCount(s *ClaudeSource) int {
+func pendingCount(s *Source) int {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return len(s.pendingTerminals)

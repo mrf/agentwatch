@@ -31,7 +31,7 @@ type Cursor string
 type Source interface {
     Name() string
     Discover(ctx context.Context) ([]SessionHandle, error)
-    Parse(ctx context.Context, h SessionHandle, c Cursor) (SourceUpdate, Cursor, error)
+    Parse(ctx context.Context, h SessionHandle, c Cursor) (Update, Cursor, error)
 }
 ```
 

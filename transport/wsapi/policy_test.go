@@ -46,8 +46,8 @@ func secretSubagents() []session.SubagentState {
 	}}
 }
 
-func secretState() session.SessionState {
-	return session.SessionState{
+func secretState() session.State {
+	return session.State{
 		ID:         secretID,
 		Source:     policySource,
 		Slug:       secretSlug,
@@ -68,7 +68,7 @@ func newPolicyServer(t *testing.T, opts ...wsapi.Option) (*wsapi.Server, *httpte
 		mock.WithName(policySource),
 		mock.WithHandles(source.SessionHandle{ID: secretID, Source: policySource}),
 	)
-	src.QueueParseResult(secretID, source.SourceUpdate{
+	src.QueueParseResult(secretID, source.Update{
 		SessionID:  secretID,
 		Slug:       secretSlug,
 		Activity:   session.ActivityWorking,
@@ -133,7 +133,7 @@ func decode(t *testing.T, data []byte) monitor.Event {
 }
 
 // assertStateRedacted checks each field of a state against the full policy.
-func assertStateRedacted(t *testing.T, where string, s session.SessionState) {
+func assertStateRedacted(t *testing.T, where string, s session.State) {
 	t.Helper()
 	checks := []struct {
 		field, got string
@@ -209,7 +209,7 @@ func TestPolicy_Delta(t *testing.T) {
 		Seq:     1,
 		At:      time.Now(),
 		Type:    monitor.EventDelta,
-		Updates: []session.SessionState{secretState()},
+		Updates: []session.State{secretState()},
 		Removed: []string{secretID, secretSubID},
 	}
 	data := readRaw(t, ts, srv, &in)
@@ -288,7 +288,7 @@ func TestPolicy_PerFlag(t *testing.T) {
 				if typ == monitor.EventSnapshot {
 					data = readRaw(t, ts, srv, nil)
 				} else {
-					in := monitor.Event{Seq: 1, Type: monitor.EventDelta, Updates: []session.SessionState{secretState()}}
+					in := monitor.Event{Seq: 1, Type: monitor.EventDelta, Updates: []session.State{secretState()}}
 					data = readRaw(t, ts, srv, &in)
 				}
 				raw := string(data)
@@ -326,7 +326,7 @@ func TestPolicy_DoesNotMutateInput(t *testing.T) {
 	in := monitor.Event{
 		Seq:       1,
 		Type:      monitor.EventDelta,
-		Updates:   []session.SessionState{secretState()},
+		Updates:   []session.State{secretState()},
 		Removed:   []string{secretID},
 		Lifecycle: lc,
 	}
@@ -385,7 +385,7 @@ func TestPolicy_Pseudonymize_CorrelatesAcrossEvents(t *testing.T) {
 		t.Errorf("snapshot subagent ParentID = %q, want %q", got, want)
 	}
 
-	send(monitor.Event{Seq: 1, Type: monitor.EventDelta, Updates: []session.SessionState{secretState()}})
+	send(monitor.Event{Seq: 1, Type: monitor.EventDelta, Updates: []session.State{secretState()}})
 	if delta := read(); len(delta.Updates) != 1 || delta.Updates[0].ID != want {
 		t.Errorf("delta ID does not match snapshot: %+v", delta.Updates)
 	}

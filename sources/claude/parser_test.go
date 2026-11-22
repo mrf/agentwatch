@@ -365,7 +365,7 @@ func TestParseLines_SubagentSlugCaptured(t *testing.T) {
 }
 
 func TestParse_SubagentSlugInSourceUpdate(t *testing.T) {
-	// Verify the slug propagates through to the SourceUpdate's SubagentState.
+	// Verify the slug propagates through to the Update's SubagentState.
 	s := newTestSource(t)
 	h := source.SessionHandle{
 		ID:     "cccccccc-0000-0000-0000-000000000003",
@@ -447,7 +447,7 @@ func TestParseLines_CompactionWithOtherRecords(t *testing.T) {
 }
 
 func TestParse_CompactionCountDeltaInSourceUpdate(t *testing.T) {
-	// Parse should propagate compactionDelta to SourceUpdate.CompactionCountDelta.
+	// Parse should propagate compactionDelta to Update.CompactionCountDelta.
 	dir := t.TempDir()
 	path := filepath.Join(dir, "session.jsonl")
 	content := `{"type":"system","subtype":"compact_boundary","sessionId":"s1","timestamp":"2026-01-01T10:00:00.000Z"}` + "\n" +
@@ -626,15 +626,15 @@ func TestParse_SubagentEnrichedFields(t *testing.T) {
 	}
 }
 
-// --- ClaudeSource integration tests (Parse + Discover) ---
+// --- Source integration tests (Parse + Discover) ---
 
-func newTestSource(t *testing.T) *ClaudeSource {
+func newTestSource(t *testing.T) *Source {
 	t.Helper()
 	s, err := New()
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	return s.(*ClaudeSource)
+	return s.(*Source)
 }
 
 func TestParse_SimpleSession(t *testing.T) {
@@ -796,7 +796,7 @@ func TestParse_CursorNoNewData(t *testing.T) {
 		t.Fatalf("second Parse: %v", err)
 	}
 	if u2.SessionID != "" || u2.Model != "" {
-		t.Errorf("expected empty SourceUpdate, got %+v", u2)
+		t.Errorf("expected empty Update, got %+v", u2)
 	}
 	if c2 != c1 {
 		t.Errorf("cursor changed with no new data: %q -> %q", c1, c2)

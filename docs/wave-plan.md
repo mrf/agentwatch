@@ -32,7 +32,7 @@ Unblocks after: Wave 1 (bootstrap)
 
 | Issue | Title | Directory | Priority |
 |-------|-------|-----------|----------|
-| agentwatch-hpy | session package: SessionState, Activity, lifecycle types | session/ | P1 |
+| agentwatch-hpy | session package: State, Activity, lifecycle types | session/ | P1 |
 | agentwatch-g50 | internal/jsonl: complete-line reader with size caps | internal/jsonl/ | P1 |
 | agentwatch-ecu | internal/clock and internal/testutil | internal/clock/, internal/testutil/ | P2 |
 | agentwatch-qms | Write API design ADRs | docs/decisions/ | P2 |

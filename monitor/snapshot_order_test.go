@@ -25,7 +25,7 @@ func TestSnapshot_SortedBySourceThenID(t *testing.T) {
 		for i := 0; i < len(ids); i++ {
 			id := names[n] + "-" + ids[i]
 			handles = append(handles, source.SessionHandle{ID: id, Source: names[n], StartedAt: clk.Now()})
-			src.AddUpdate(id, source.SourceUpdate{SessionID: id, Activity: session.ActivityWorking}, "c1")
+			src.AddUpdate(id, source.Update{SessionID: id, Activity: session.ActivityWorking}, "c1")
 		}
 		src.SetHandles(handles)
 	}
@@ -64,7 +64,7 @@ func TestPollOnce_DeltaHasAtMostOneUpdatePerSession(t *testing.T) {
 		{ID: "parent", Source: "test", StartedAt: clk.Now()},
 		{ID: "child", Source: "test", StartedAt: clk.Now()},
 	})
-	src.AddUpdate("parent", source.SourceUpdate{
+	src.AddUpdate("parent", source.Update{
 		SessionID: "parent",
 		Slug:      "main-session",
 		Activity:  session.ActivityWorking,
@@ -72,7 +72,7 @@ func TestPollOnce_DeltaHasAtMostOneUpdatePerSession(t *testing.T) {
 			{ID: "tu-1", Slug: "child-slug", Activity: session.ActivityWorking},
 		},
 	}, "c1")
-	src.AddUpdate("child", source.SourceUpdate{
+	src.AddUpdate("child", source.Update{
 		SessionID: "child",
 		Slug:      "child-slug",
 		Activity:  session.ActivityWorking,
@@ -91,7 +91,7 @@ func TestPollOnce_DeltaHasAtMostOneUpdatePerSession(t *testing.T) {
 	// Same poll: parent reports the subagent done AND the child gets new data,
 	// so the child is updated by the parse loop then terminated by the sweep.
 	clk.Advance(time.Second)
-	src.AddUpdate("parent", source.SourceUpdate{
+	src.AddUpdate("parent", source.Update{
 		SessionID: "parent",
 		Slug:      "main-session",
 		Activity:  session.ActivityWorking,
@@ -99,7 +99,7 @@ func TestPollOnce_DeltaHasAtMostOneUpdatePerSession(t *testing.T) {
 			{ID: "tu-1", Slug: "child-slug", Activity: session.ActivityTerminal},
 		},
 	}, "c2")
-	src.AddUpdate("child", source.SourceUpdate{
+	src.AddUpdate("child", source.Update{
 		SessionID:     "child",
 		Slug:          "child-slug",
 		Activity:      session.ActivityWorking,
@@ -117,7 +117,7 @@ func TestPollOnce_DeltaHasAtMostOneUpdatePerSession(t *testing.T) {
 			continue
 		}
 		deltas++
-		seen := make(map[string]session.SessionState)
+		seen := make(map[string]session.State)
 		for j := 0; j < len(ev.Updates); j++ {
 			u := ev.Updates[j]
 			if _, dup := seen[u.ID]; dup {

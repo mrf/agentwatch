@@ -477,7 +477,7 @@ func (r *parseResult) parentToSubagent() map[string]string {
 }
 
 // buildSubagentStates converts internal subagent results to the public
-// session.SubagentState slice for inclusion in a SourceUpdate.
+// session.SubagentState slice for inclusion in an Update.
 func buildSubagentStates(subs map[string]*subagentResult) []session.SubagentState {
 	if len(subs) == 0 {
 		return nil

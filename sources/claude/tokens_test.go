@@ -94,7 +94,7 @@ func TestParse_WithContextWindowsOverrides(t *testing.T) {
 
 func TestWithContextWindows_CopiesAndKeepsDefaults(t *testing.T) {
 	m := map[string]int{"custom-model": 5000}
-	s := &ClaudeSource{}
+	s := &Source{}
 	WithContextWindows(m)(s)
 	m["custom-model"] = 1
 	if got := s.contextWindow("custom-model"); got != 5000 {

@@ -128,10 +128,10 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 // transcript file; an empty cursor means start from zero. If the file was
 // truncated or replaced, or the cursor is unparseable, it is re-read from the
 // start as a Reset update.
-func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
+func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.Update, source.Cursor, error) {
 	res, nextPos, reset, err := jsonl.ReadFromCursor(h.Path, string(c), jsonl.Options{})
 	if err != nil {
-		return source.SourceUpdate{}, c, fmt.Errorf("cursor: read %s: %w", h.Path, err)
+		return source.Update{}, c, fmt.Errorf("cursor: read %s: %w", h.Path, err)
 	}
 	lines := res.Lines
 

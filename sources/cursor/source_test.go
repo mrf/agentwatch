@@ -311,13 +311,13 @@ func TestParseNoDataReturnsZeroUpdate(t *testing.T) {
 		t.Error("first Parse: expected non-empty SessionID")
 	}
 
-	// Second parse with returned cursor: no new lines → zero SourceUpdate.
+	// Second parse with returned cursor: no new lines → zero Update.
 	u2, _, err := src.Parse(context.Background(), h, c1)
 	if err != nil {
 		t.Fatalf("second Parse error: %v", err)
 	}
 	if u2.SessionID != "" {
-		t.Errorf("second Parse: SessionID = %q, want empty (zero SourceUpdate)", u2.SessionID)
+		t.Errorf("second Parse: SessionID = %q, want empty (zero Update)", u2.SessionID)
 	}
 }
 

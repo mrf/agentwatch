@@ -16,12 +16,12 @@ func TestDiscover_UsesWalker(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	cs, ok := src.(*ClaudeSource)
+	cs, ok := src.(*Source)
 	if !ok {
-		t.Fatalf("New returned %T, want *ClaudeSource", src)
+		t.Fatalf("New returned %T, want *Source", src)
 	}
 	if cs.walker == nil {
-		t.Fatal("ClaudeSource.walker is nil; Discover must use filewatch")
+		t.Fatal("Source.walker is nil; Discover must use filewatch")
 	}
 }
 

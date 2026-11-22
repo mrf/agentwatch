@@ -40,7 +40,7 @@ func appendFile(t *testing.T, path, content string) {
 	}
 }
 
-func onlySession(t *testing.T, m *monitor.Monitor) session.SessionState {
+func onlySession(t *testing.T, m *monitor.Monitor) session.State {
 	t.Helper()
 	snap := m.Snapshot()
 	if len(snap) != 1 {

@@ -120,10 +120,10 @@ if err := mon.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 
 ### session package
 
-`SessionState` is the public snapshot of a monitored session:
+`State` is the public snapshot of a monitored session:
 
 ```go
-type SessionState struct {
+type State struct {
     ID                 string
     Source             string
     Slug               string
