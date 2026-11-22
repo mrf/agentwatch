@@ -1,10 +1,13 @@
 package opencode
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"os"
+	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"time"
@@ -12,46 +15,93 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-// cursor tracks parse position between calls.
-// Format: "<msg_count>,<tool_count>"
+// archiveState records how far the archived-session terminal report has got.
+type archiveState int
+
+const (
+	archiveNone archiveState = iota
+	// archivePending: Terminal was reported on the session's first sight. The
+	// monitor registers a session first seen with Terminal=true as active, so
+	// the report is repeated once to land the terminal transition.
+	archivePending
+	// archiveConfirmed: the terminal transition has been reported; stay silent.
+	archiveConfirmed
+)
+
+// cursor records what was last reported for a session, so Parse can return a
+// zero update when nothing changed.
+// Format: "<msgs>,<tools>,<tokensIn>,<tokensOut>,<lastActivityUnixNano>,<archive>".
+// The legacy two-field form "<msgs>,<tools>" is still accepted.
 type cursor struct {
-	msgCount  int
-	toolCount int
+	msgCount     int
+	toolCount    int
+	tokensInput  int
+	tokensOutput int
+	lastActivity int64
+	archive      archiveState
+	// seen is true for any decoded (non-empty) cursor; it is implied by the
+	// encoding, not stored in it.
+	seen bool
 }
 
 func encodeCursor(c cursor) string {
-	return strconv.Itoa(c.msgCount) + "," + strconv.Itoa(c.toolCount)
+	return strconv.Itoa(c.msgCount) + "," + strconv.Itoa(c.toolCount) + "," +
+		strconv.Itoa(c.tokensInput) + "," + strconv.Itoa(c.tokensOutput) + "," +
+		strconv.FormatInt(c.lastActivity, 10) + "," + strconv.Itoa(int(c.archive))
 }
 
 func decodeCursor(s string) (cursor, error) {
 	if s == "" {
 		return cursor{}, nil
 	}
-	parts := strings.SplitN(s, ",", 2)
-	if len(parts) != 2 {
+	parts := strings.Split(s, ",")
+	if len(parts) != 2 && len(parts) != 6 {
 		return cursor{}, fmt.Errorf("opencode: invalid cursor %q", s)
 	}
-	mc, err := strconv.Atoi(parts[0])
-	if err != nil {
-		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: %w", s, err)
+	var n [6]int64
+	for i := 0; i < len(parts); i++ {
+		v, err := strconv.ParseInt(parts[i], 10, 64)
+		if err != nil {
+			return cursor{}, fmt.Errorf("opencode: invalid cursor %q: %w", s, err)
+		}
+		n[i] = v
 	}
-	tc, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: %w", s, err)
+	if n[5] < int64(archiveNone) || n[5] > int64(archiveConfirmed) {
+		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: bad archive state", s)
 	}
-	return cursor{msgCount: mc, toolCount: tc}, nil
+	return cursor{
+		msgCount:     int(n[0]),
+		toolCount:    int(n[1]),
+		tokensInput:  int(n[2]),
+		tokensOutput: int(n[3]),
+		lastActivity: n[4],
+		archive:      archiveState(n[5]),
+		seen:         true,
+	}, nil
+}
+
+// dsn builds a read-only SQLite URI for path. The path is URL-escaped so that
+// '?', '#' and '%' in it are not read as URI syntax.
+func dsn(path string) string {
+	p := filepath.ToSlash(path)
+	if len(p) > 1 && p[1] == ':' {
+		p = "/" + p // Windows drive letter
+	}
+	u := url.URL{
+		Scheme:   "file",
+		OmitHost: true,
+		Path:     p,
+		RawQuery: url.Values{
+			"mode":    {"ro"},
+			"_pragma": {"busy_timeout(5000)"},
+		}.Encode(),
+	}
+	return u.String()
 }
 
 // openReadOnly opens the SQLite database in read-only mode.
-// Returns (nil, nil) if the file does not exist.
 func openReadOnly(path string) (*sql.DB, error) {
-	if _, err := os.Stat(path); err != nil {
-		if os.IsNotExist(err) {
-			return nil, nil
-		}
-		return nil, fmt.Errorf("opencode: stat %s: %w", path, err)
-	}
-	db, err := sql.Open("sqlite", "file:"+path+"?mode=ro")
+	db, err := sql.Open("sqlite", dsn(path))
 	if err != nil {
 		return nil, fmt.Errorf("opencode: open %s: %w", path, err)
 	}
@@ -73,8 +123,8 @@ type sessionRow struct {
 }
 
 // discoverSessions queries the session table, optionally filtering by cutoff.
-func discoverSessions(db *sql.DB, cutoff time.Time) ([]sessionRow, error) {
-	rows, err := db.Query(
+func discoverSessions(ctx context.Context, db *sql.DB, cutoff time.Time) ([]sessionRow, error) {
+	rows, err := db.QueryContext(ctx,
 		`SELECT id, slug, directory, model, COALESCE(tokens_input, 0), COALESCE(tokens_output, 0),
 		 created_at, updated_at, time_archived
 		 FROM session ORDER BY updated_at DESC`,
@@ -118,13 +168,17 @@ type parseResult struct {
 	toolDelta    int
 	currentTool  string
 	lastRole     string
+	// changed is false when there is nothing new to report; the caller then
+	// returns a zero update.
+	changed bool
 }
 
-// queryParseData queries the database for session parse data and computes deltas.
-func queryParseData(db *sql.DB, sessionID string, cur cursor) (parseResult, cursor, error) {
+// queryParseData queries the database for session parse data and computes
+// deltas. When nothing changed since cur it returns changed=false and cur.
+func queryParseData(ctx context.Context, db *sql.DB, sessionID string, cur cursor) (parseResult, cursor, error) {
 	// Query session row.
 	var s sessionRow
-	err := db.QueryRow(
+	err := db.QueryRowContext(ctx,
 		`SELECT id, slug, directory, model, COALESCE(tokens_input, 0), COALESCE(tokens_output, 0),
 		 created_at, updated_at, time_archived
 		 FROM session WHERE id = ?`, sessionID,
@@ -132,15 +186,22 @@ func queryParseData(db *sql.DB, sessionID string, cur cursor) (parseResult, curs
 		&s.tokensInput, &s.tokensOutput,
 		&s.createdAt, &s.updatedAt, &s.timeArchived)
 	if err != nil {
-		if err == sql.ErrNoRows {
+		if errors.Is(err, sql.ErrNoRows) {
 			return parseResult{}, cur, nil
 		}
 		return parseResult{}, cur, fmt.Errorf("opencode: query session %s: %w", sessionID, err)
 	}
 
+	// An archived session is reported terminal once; after that it is silent
+	// until it is unarchived.
+	first := !cur.seen
+	if s.timeArchived.Valid && s.timeArchived.String != "" && cur.archive == archiveConfirmed {
+		return parseResult{}, cur, nil
+	}
+
 	// Count total messages.
 	var msgCount int
-	if err := db.QueryRow(
+	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM message WHERE session_id = ?`, sessionID,
 	).Scan(&msgCount); err != nil {
 		return parseResult{}, cur, fmt.Errorf("opencode: count messages: %w", err)
@@ -148,7 +209,7 @@ func queryParseData(db *sql.DB, sessionID string, cur cursor) (parseResult, curs
 
 	// Count total tool-invocation parts.
 	var toolCount int
-	if err := db.QueryRow(
+	if err := db.QueryRowContext(ctx,
 		`SELECT COUNT(*) FROM part WHERE session_id = ?
 		 AND json_extract(data, '$.type') = 'tool-invocation'`,
 		sessionID,
@@ -159,13 +220,13 @@ func queryParseData(db *sql.DB, sessionID string, cur cursor) (parseResult, curs
 	// Get latest tool-invocation part's toolName.
 	var currentTool string
 	var toolData sql.NullString
-	err = db.QueryRow(
+	err = db.QueryRowContext(ctx,
 		`SELECT data FROM part WHERE session_id = ?
 		 AND json_extract(data, '$.type') = 'tool-invocation'
 		 ORDER BY created_at DESC LIMIT 1`,
 		sessionID,
 	).Scan(&toolData)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return parseResult{}, cur, fmt.Errorf("opencode: query latest tool: %w", err)
 	}
 	if toolData.Valid {
@@ -177,12 +238,12 @@ func queryParseData(db *sql.DB, sessionID string, cur cursor) (parseResult, curs
 	var lastRole string
 	var msgData sql.NullString
 	var msgUpdatedAt sql.NullString
-	err = db.QueryRow(
+	err = db.QueryRowContext(ctx,
 		`SELECT data, updated_at FROM message WHERE session_id = ?
 		 ORDER BY created_at DESC LIMIT 1`,
 		sessionID,
 	).Scan(&msgData, &msgUpdatedAt)
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return parseResult{}, cur, fmt.Errorf("opencode: query latest message: %w", err)
 	}
 	if msgData.Valid {
@@ -228,9 +289,22 @@ func queryParseData(db *sql.DB, sessionID string, cur cursor) (parseResult, curs
 	}
 
 	newCur := cursor{
-		msgCount:  msgCount,
-		toolCount: toolCount,
+		msgCount:     msgCount,
+		toolCount:    toolCount,
+		tokensInput:  s.tokensInput,
+		tokensOutput: s.tokensOutput,
+		seen:         true,
 	}
+	if !lastActivity.IsZero() {
+		newCur.lastActivity = lastActivity.UnixNano()
+	}
+	if terminal {
+		newCur.archive = archiveConfirmed
+		if first {
+			newCur.archive = archivePending
+		}
+	}
+	result.changed = first || newCur != cur
 
 	return result, newCur, nil
 }
