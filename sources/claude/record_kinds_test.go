@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"testing"
 
+	"github.com/mrf/agentwatch/session"
 	"github.com/mrf/agentwatch/source"
 )
 
@@ -33,11 +34,24 @@ func TestParseLines_CompactSummaryIsNotAMessage(t *testing.T) {
 	}
 }
 
-func TestParseLines_SystemRecordsOtherThanCompactBoundaryIgnored(t *testing.T) {
-	line := `{"type":"system","subtype":"turn_duration","isSidechain":false,"timestamp":"2026-01-01T10:00:00.000Z","sessionId":"s1"}`
-	r := parseLines([][]byte{[]byte(line)})
-	if r.compactionDelta != 0 {
-		t.Errorf("compactionDelta: got %d, want 0", r.compactionDelta)
+func TestParseLines_UnknownSystemSubtypesIgnored(t *testing.T) {
+	// Shapes mirror real transcripts (keys and subtype values only).
+	subtypes := []string{"turn_duration", "scheduled_task_fire", "local_command", "informational", "api_error", "stop_hook_summary", "some_future_subtype"}
+	for i := 0; i < len(subtypes); i++ {
+		subtype := subtypes[i]
+		t.Run(subtype, func(t *testing.T) {
+			line := `{"type":"system","subtype":"` + subtype + `","content":"x","level":"info","durationMs":1200,"isSidechain":false,"timestamp":"2026-01-01T10:00:00.000Z","sessionId":"s1","cwd":"/p"}`
+			r := parseLines([][]byte{[]byte(line)})
+			if r.compactionDelta != 0 || r.msgDelta != 0 || r.toolDelta != 0 {
+				t.Errorf("counts changed: compaction=%d msg=%d tool=%d", r.compactionDelta, r.msgDelta, r.toolDelta)
+			}
+			if r.activity != session.ActivityIdle {
+				t.Errorf("activity: got %q, want idle (default)", r.activity)
+			}
+			if r.hasData {
+				t.Error("hasData: system subtype must not report conversation data")
+			}
+		})
 	}
 }
 
