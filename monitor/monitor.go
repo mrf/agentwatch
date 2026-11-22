@@ -17,6 +17,11 @@ import (
 type Monitor struct {
 	cfg config
 
+	// pollSem serializes PollOnce. It is a channel semaphore rather than a
+	// mutex so a blocked caller can give up when its context is canceled.
+	// It is separate from mu, which is never held across Parse or sinks.
+	pollSem chan struct{}
+
 	mu      sync.Mutex
 	store   map[string]session.SessionState
 	cursors map[string]source.Cursor // "source:sessionID" -> cursor
@@ -40,6 +45,7 @@ func New(opts ...Option) (*Monitor, error) {
 
 	return &Monitor{
 		cfg:     cfg,
+		pollSem: make(chan struct{}, 1),
 		store:   make(map[string]session.SessionState),
 		cursors: make(map[string]source.Cursor),
 		removed: make(map[string]struct{}),
@@ -55,7 +61,19 @@ func cursorKey(sourceName, sessionID string) string {
 // PollOnce discovers and parses all sources, updates the internal store,
 // and delivers events to sinks. Individual source errors are logged but
 // do not stop the poll. Returns ctx.Err() if the context is canceled.
+//
+// Calls are serialized: a PollOnce that arrives while another (including
+// Run's internal poll) is in flight waits for it to finish, so each cursor
+// is read, parsed and persisted by one poll at a time and deltas are applied
+// once. A waiting call returns ctx.Err() if its context is canceled first.
 func (m *Monitor) PollOnce(ctx context.Context) error {
+	select {
+	case m.pollSem <- struct{}{}:
+		defer func() { <-m.pollSem }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+
 	var (
 		updates      []session.SessionState
 		lifecycles   []session.LifecycleEvent

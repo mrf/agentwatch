@@ -157,8 +157,9 @@ func TestRace_ConcurrentSnapshotDuringRepeatedPolling(t *testing.T) {
 }
 
 // TestRace_ConcurrentPollOnce runs PollOnce from multiple goroutines
-// simultaneously. PollOnce does not reject concurrent calls — the internal
-// mutex serializes individual state updates — so this verifies no data races.
+// simultaneously. PollOnce does not reject concurrent calls — it serializes
+// them — so this verifies no data races. Count correctness is covered by
+// pollserial_test.go.
 func TestRace_ConcurrentPollOnce(t *testing.T) {
 	t.Parallel()
 	clk := testClock()
