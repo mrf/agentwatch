@@ -117,7 +117,7 @@ func TestPollOnce_RunLoopAndExternalPollDoNotDoubleApply(t *testing.T) {
 	defer cancel()
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	clk.Advance(time.Second) // Run's tick starts a poll
 	deadline := time.Now().Add(2 * time.Second)

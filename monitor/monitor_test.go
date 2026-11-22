@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"runtime"
 	"sync"
 	"testing"
 	"time"
@@ -1885,11 +1884,16 @@ func TestTransition_MultipleSessionsIndependentLifecycles(t *testing.T) {
 
 // --- Run integration tests ---
 
-// yieldToRun gives the Run goroutine time to start and create its ticker.
-// Without this, clk.Advance may fire before the ticker exists.
-func yieldToRun() {
-	runtime.Gosched()
-	time.Sleep(10 * time.Millisecond)
+// waitForRunTicker blocks until Run has registered its poll ticker on clk.
+// Without this, clk.Advance may fire before the ticker exists and the tick is
+// lost.
+func waitForRunTicker(t *testing.T, clk *clock.Mock) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := clk.BlockUntilTickers(ctx, 1); err != nil {
+		t.Fatalf("Run never registered its ticker: %v", err)
+	}
 }
 
 // waitForEvent reads from eventCh with a real-time deadline as a safety net.
@@ -1949,7 +1953,7 @@ func TestRun_TickDrivesPollOnce(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Trigger first tick.
 	clk.Advance(time.Second)
@@ -2043,7 +2047,7 @@ func TestRun_MultipleTicks(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Tick 1: discover s1.
 	clk.Advance(time.Second)
@@ -2107,7 +2111,7 @@ func TestRun_CompletionRetention_RemovesTerminalSession(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Tick 1: discover.
 	clk.Advance(time.Second)
@@ -2199,7 +2203,7 @@ func TestRun_RetentionNotExpired_SessionRetained(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Tick 1: discover.
 	clk.Advance(time.Second)
@@ -2267,7 +2271,7 @@ func TestRun_RemovedSessionResumes(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Tick 1: discover s1 active.
 	clk.Advance(time.Second)
@@ -2373,7 +2377,7 @@ func TestRun_EventSeqMonotonicAcrossTicks(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Tick 1.
 	clk.Advance(time.Second)
@@ -2443,7 +2447,7 @@ func TestRun_CompletionRetention_WithRemovalEvent(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Tick 1: discover.
 	clk.Advance(time.Second)
@@ -2736,7 +2740,7 @@ func TestRun_Race(t *testing.T) {
 
 	done := make(chan error, 1)
 	go func() { done <- m.Run(ctx) }()
-	yieldToRun()
+	waitForRunTicker(t, clk)
 
 	// Concurrently advance clock and take snapshots.
 	snapshotDone := make(chan struct{})

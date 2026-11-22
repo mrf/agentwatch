@@ -3,6 +3,7 @@
 package clock
 
 import (
+	"context"
 	"sync"
 	"time"
 )
@@ -72,11 +73,14 @@ type FakeClock struct {
 	mu      sync.Mutex
 	now     time.Time
 	tickers []*fakeTicker
+	// registered is closed and replaced each time a ticker is added, waking
+	// BlockUntilTickers waiters.
+	registered chan struct{}
 }
 
 // NewFake returns a FakeClock initialized to initial.
 func NewFake(initial time.Time) *FakeClock {
-	return &FakeClock{now: initial}
+	return &FakeClock{now: initial, registered: make(chan struct{})}
 }
 
 // Now returns the current fake time.
@@ -97,7 +101,38 @@ func (f *FakeClock) NewTicker(d time.Duration) Ticker {
 		ch:   make(chan time.Time, 1),
 	}
 	f.tickers = append(f.tickers, t)
+	close(f.registered)
+	f.registered = make(chan struct{})
 	return t
+}
+
+// BlockUntilTickers blocks until at least n unstopped tickers are registered,
+// or ctx is done. Tests call it before Advance so a tick cannot fire ahead of
+// the goroutine under test creating its ticker, which would drop the tick.
+func (f *FakeClock) BlockUntilTickers(ctx context.Context, n int) error {
+	for {
+		f.mu.Lock()
+		tickers := make([]*fakeTicker, len(f.tickers))
+		copy(tickers, f.tickers)
+		registered := f.registered
+		f.mu.Unlock()
+
+		active := 0
+		for i := 0; i < len(tickers); i++ {
+			if !tickers[i].isStopped() {
+				active++
+			}
+		}
+		if active >= n {
+			return nil
+		}
+
+		select {
+		case <-registered:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
 }
 
 // Advance moves the clock forward by d and fires any tickers whose interval
@@ -126,6 +161,12 @@ type fakeTicker struct {
 
 func (t *fakeTicker) C() <-chan time.Time {
 	return t.ch
+}
+
+func (t *fakeTicker) isStopped() bool {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.stopped
 }
 
 func (t *fakeTicker) Stop() {
