@@ -161,10 +161,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, isRoot bool, now time.
 
 	info, err := os.Stat(dir)
 	if err != nil {
-		if isRoot && !os.IsNotExist(err) {
-			return fmt.Errorf("filewatch: stat root: %w", err)
-		}
-		return nil
+		return rootErr(isRoot, "stat", err)
 	}
 	id, ok := identify(dir, info)
 	if !ok {
@@ -182,90 +179,17 @@ func (w *Walker) walkDir(ctx context.Context, dir string, isRoot bool, now time.
 	w.mu.Unlock()
 
 	if cached && snap.mtime.Equal(dirMtime) {
-		// Directory contents unchanged: use the cached file list, but re-stat
-		// each file. Appending to a file changes its mtime and not its
-		// directory's, so a cached mtime would age an active file out of the
-		// window. A file that vanished is dropped.
-		for _, e := range snap.files {
-			info, statErr := os.Stat(e.Path)
-			if statErr != nil || !info.Mode().IsRegular() {
-				continue
-			}
-			e.ModTime = info.ModTime()
-			if w.passesAge(e.ModTime, now) {
-				*results = append(*results, e)
-			}
-		}
-		// A file added to a subdirectory only updates that subdir's mtime, not
-		// this directory's mtime. Always recurse into known subdirectories so
-		// changes deep in the tree are not missed.
-		for _, sub := range snap.subdirs {
-			if err := w.walkDir(ctx, sub, false, now, ancestors, results); err != nil {
-				return err
-			}
-		}
-		return nil
+		return w.walkCached(ctx, snap, now, ancestors, results)
 	}
 
 	// Directory changed (or first visit): read entries and update cache.
 	des, err := os.ReadDir(dir)
 	if err != nil {
-		if isRoot && !os.IsNotExist(err) {
-			return fmt.Errorf("filewatch: read root: %w", err)
-		}
-		return nil
+		return rootErr(isRoot, "read", err)
 	}
-
-	var (
-		dirFiles []Entry
-		subdirs  []string
-	)
-
-	for _, de := range des {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-
-		name := de.Name()
-		fullPath := filepath.Join(dir, name)
-		deType := de.Type()
-		isSymlink := deType&fs.ModeSymlink != 0
-
-		if isSymlink {
-			target, statErr := os.Stat(fullPath)
-			if statErr != nil {
-				// Broken symlink — skip.
-				continue
-			}
-			if target.IsDir() {
-				if w.followSymlinks && !w.skips(fullPath) {
-					subdirs = append(subdirs, fullPath)
-					if err := w.walkDir(ctx, fullPath, false, now, ancestors, results); err != nil {
-						return err
-					}
-				}
-				continue
-			}
-			w.collectFile(name, fullPath, target, now, &dirFiles, results)
-			continue
-		}
-
-		if de.IsDir() {
-			if w.skips(fullPath) {
-				continue
-			}
-			subdirs = append(subdirs, fullPath)
-			if err := w.walkDir(ctx, fullPath, false, now, ancestors, results); err != nil {
-				return err
-			}
-			continue
-		}
-
-		fi, statErr := de.Info()
-		if statErr != nil {
-			continue
-		}
-		w.collectFile(name, fullPath, fi, now, &dirFiles, results)
+	dirFiles, subdirs, err := w.walkEntries(ctx, dir, des, now, ancestors, results)
+	if err != nil {
+		return err
 	}
 
 	w.mu.Lock()
@@ -273,6 +197,98 @@ func (w *Walker) walkDir(ctx context.Context, dir string, isRoot bool, now time.
 	w.mu.Unlock()
 
 	return nil
+}
+
+// rootErr returns the error for a failed op on a walked directory: only a
+// root that exists but cannot be read is fatal.
+func rootErr(isRoot bool, op string, err error) error {
+	if isRoot && !os.IsNotExist(err) {
+		return fmt.Errorf("filewatch: %s root: %w", op, err)
+	}
+	return nil
+}
+
+// walkEntries collects the files of dir's entries des and recurses into its
+// subdirectories, returning both for the directory cache.
+func (w *Walker) walkEntries(ctx context.Context, dir string, des []fs.DirEntry, now time.Time, ancestors map[dirID]struct{}, results *[]Entry) ([]Entry, []string, error) {
+	var (
+		dirFiles []Entry
+		subdirs  []string
+	)
+
+	for _, de := range des {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
+
+		name := de.Name()
+		fullPath := filepath.Join(dir, name)
+		descend, fi := w.classify(fullPath, de)
+		if descend {
+			subdirs = append(subdirs, fullPath)
+			if err := w.walkDir(ctx, fullPath, false, now, ancestors, results); err != nil {
+				return nil, nil, err
+			}
+			continue
+		}
+		if fi != nil {
+			w.collectFile(name, fullPath, fi, now, &dirFiles, results)
+		}
+	}
+	return dirFiles, subdirs, nil
+}
+
+// walkCached replays an unchanged directory from its snapshot. Each cached
+// file is re-stated: appending to a file changes its mtime and not its
+// directory's, so a cached mtime would age an active file out of the window.
+// A file that vanished is dropped.
+func (w *Walker) walkCached(ctx context.Context, snap dirSnapshot, now time.Time, ancestors map[dirID]struct{}, results *[]Entry) error {
+	for _, e := range snap.files {
+		info, statErr := os.Stat(e.Path)
+		if statErr != nil || !info.Mode().IsRegular() {
+			continue
+		}
+		e.ModTime = info.ModTime()
+		if w.passesAge(e.ModTime, now) {
+			*results = append(*results, e)
+		}
+	}
+	// A file added to a subdirectory only updates that subdir's mtime, not
+	// this directory's mtime. Always recurse into known subdirectories so
+	// changes deep in the tree are not missed.
+	for _, sub := range snap.subdirs {
+		if err := w.walkDir(ctx, sub, false, now, ancestors, results); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// classify decides what to do with directory entry de at fullPath: descend
+// into it as a subdirectory, collect it as a file described by info (the
+// symlink target for symlinks), or skip it (false, nil).
+func (w *Walker) classify(fullPath string, de fs.DirEntry) (descend bool, info fs.FileInfo) {
+	if de.Type()&fs.ModeSymlink != 0 {
+		target, err := os.Stat(fullPath)
+		if err != nil {
+			// Broken symlink — skip.
+			return false, nil
+		}
+		if target.IsDir() {
+			return w.followSymlinks && !w.skips(fullPath), nil
+		}
+		return false, target
+	}
+
+	if de.IsDir() {
+		return !w.skips(fullPath), nil
+	}
+
+	fi, err := de.Info()
+	if err != nil {
+		return false, nil
+	}
+	return false, fi
 }
 
 // collectFile adds a file to the directory cache slice and, if it passes the
