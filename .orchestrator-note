@@ -1,0 +1,7 @@
+README changes (for review):
+1. Line 6 intro: "Gemini CLI" -> "Cursor, OpenCode, Pi, Antigravity CLI".
+2. Line 28: "Go 1.25+" -> "Go 1.26+" (go.mod is 1.26.0).
+3. Line 116: WithLogger default "discard" -> `slog.Default()` (monitor/options.go:39, wsapi/options.go:51). Code unchanged.
+4. Sources table: removed sources/gemini row; added cursor, opencode, pi, antigravity rows (discovery text taken from each package's godoc).
+Also: docs/architecture.md tree (same swap), docs/source-implementation.md cursor table (gemini -> antigravity; cursor format matches), internal/filewatch comment.
+Left alone as historical: ADRs, wave-plan, migration doc, briefings, agentwatch-plan.md (still mention Gemini; say if you want them touched).

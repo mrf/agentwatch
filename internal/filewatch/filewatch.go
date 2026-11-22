@@ -2,7 +2,7 @@
 // It handles directory walking with glob pattern filters, age-window filtering,
 // and efficient re-scanning by tracking directory modification times.
 //
-// Sources (claude, codex, gemini) use Walker in their Discover() implementations.
+// Sources (claude, codex, antigravity) use Walker in their Discover() implementations.
 // Keep this package internal until a custom source author demonstrably needs it.
 package filewatch
 

@@ -12,7 +12,10 @@ github.com/mrf/agentwatch/
 ├── sources/
 │   ├── claude/       PUBLIC  — Claude Code source (JSONL session files)
 │   ├── codex/        PUBLIC  — OpenAI Codex CLI source (rollout JSONL files)
-│   ├── gemini/       PUBLIC  — Gemini CLI source (checkpoint.json files)
+│   ├── cursor/       PUBLIC  — Cursor source (agent-transcripts JSONL files)
+│   ├── opencode/     PUBLIC  — OpenCode source (SQLite database)
+│   ├── pi/           PUBLIC  — Pi source (session JSONL files)
+│   ├── antigravity/  PUBLIC  — Antigravity CLI source (<uuid>.json session files)
 │   └── mock/         PUBLIC  — deterministic test double
 │
 ├── transport/
