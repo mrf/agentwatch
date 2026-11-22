@@ -5,6 +5,7 @@ package jsonl
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -21,6 +22,10 @@ const (
 	// the newline terminator). Lines exceeding this limit are skipped.
 	MaxLineSize = 1024 * 1024
 )
+
+// ErrFileTooLarge is returned by ForEachEntry for a file larger than
+// MaxFileSize. Retrying will not help until the file shrinks.
+var ErrFileTooLarge = errors.New("jsonl: file too large")
 
 // TokenUsage represents API token usage from an assistant message.
 type TokenUsage struct {
@@ -111,27 +116,27 @@ type EntryVisitor func(entry *Entry, line []byte) bool
 // complete, parseable line. Returns the final byte offset after the last
 // complete line consumed.
 //
-// Files exceeding MaxFileSize are rejected with an error. Lines exceeding
+// Files exceeding MaxFileSize are rejected with ErrFileTooLarge. Lines exceeding
 // MaxLineSize are skipped with a warning log and parsing continues.
 func ForEachEntry(path string, offset int64, visitor EntryVisitor) (int64, error) {
 	f, err := os.Open(path)
 	if err != nil {
-		return offset, err
+		return offset, fmt.Errorf("jsonl: open: %w", err)
 	}
 	defer func() { _ = f.Close() }()
 
 	info, err := f.Stat()
 	if err != nil {
-		return offset, err
+		return offset, fmt.Errorf("jsonl: stat: %w", err)
 	}
 	if info.Size() > MaxFileSize {
 		slog.Warn("skipping oversized file", "pkg", "agentwatch/jsonl", "path", path, "size", info.Size(), "limit", MaxFileSize)
-		return offset, fmt.Errorf("file size %d exceeds max %d", info.Size(), MaxFileSize)
+		return offset, fmt.Errorf("%w: size %d exceeds max %d", ErrFileTooLarge, info.Size(), MaxFileSize)
 	}
 
 	if offset > 0 {
 		if _, err = f.Seek(offset, io.SeekStart); err != nil {
-			return offset, err
+			return offset, fmt.Errorf("jsonl: seek: %w", err)
 		}
 	}
 
@@ -142,7 +147,7 @@ func ForEachEntry(path string, offset int64, visitor EntryVisitor) (int64, error
 		line, readErr := reader.ReadBytes('\n')
 
 		if readErr != nil && readErr != io.EOF {
-			return parsedOffset, readErr
+			return parsedOffset, fmt.Errorf("jsonl: read: %w", readErr)
 		}
 
 		if len(line) == 0 {

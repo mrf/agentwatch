@@ -19,6 +19,7 @@ linters:
     - contextcheck
     - copyloopvar
     - durationcheck
+    - err113
     - errchkjson
     - errname
     - errorlint
@@ -54,6 +55,7 @@ linters:
     - usetesting
     - wastedassign
     - whitespace
+    - wrapcheck
 
   # Deliberately NOT enabled (golangci-lint `default: all` minus these):
   #   wsl, wsl_v5, nlreturn, whitespace-adjacent layout linters, lll, godot,
@@ -66,8 +68,6 @@ linters:
   #   cyclop, gocognit, gocyclo, funlen, nestif, maintidx — complexity
   #   metrics; ~45 existing functions exceed the defaults and fixing them is
   #   refactoring, not lint hygiene. Tracked as a separate ticket.
-  #   err113, wrapcheck — would demand sentinel/wrapped errors on ~60 call
-  #   sites; tracked as a separate ticket.
   #   intrange — CLAUDE.md design rule 8 mandates classic `for i := 0; ...`
   #   loops (modernize's rangeint is disabled below for the same reason).
   #   gochecknoglobals — package-level tables and test fixtures are
@@ -81,6 +81,11 @@ linters:
     gosec:
       excludes:
         - G304 # file paths come from caller-configured session directories; reading them is the library's purpose.
+    wrapcheck:
+      extra-ignore-sigs:
+        - func (context.Context).Err() error # cancellation is returned as-is; callers match it with errors.Is and it carries no call-site detail.
+      ignore-package-globs:
+        - github.com/mrf/agentwatch/* # this module's own errors already carry context; wrapcheck targets third-party boundaries.
     revive:
       rules:
         - name: exported
@@ -99,6 +104,8 @@ linters:
           - goconst # repeated fixture strings are clearer inline.
           - unparam # test helpers keep a uniform signature.
           - forcetypeassert # a failed assertion in a test panics, which is the desired failure.
+          - err113 # injected fixture errors are one-off values; no caller matches their identity.
+          - wrapcheck # test fakes and helpers pass errors through untouched on purpose.
       - path: internal/testutil/
         linters:
           - thelper # helpers take `t testing.TB`; renaming to `tb` is churn.

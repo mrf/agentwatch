@@ -3,6 +3,7 @@ package claude
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -997,21 +998,21 @@ func TestParse_EndMarker_MarkerNotForThisSession(t *testing.T) {
 
 func TestValidateEndMarker_EmptySessionID(t *testing.T) {
 	m := &sessionEndMarker{}
-	if err := validateEndMarker(m, time.Now()); err == nil {
+	if err := validateEndMarker(m, time.Now()); !errors.Is(err, errInvalidEndMarker) {
 		t.Error("expected error for empty session_id")
 	}
 }
 
 func TestValidateEndMarker_SessionIDTooLong(t *testing.T) {
 	m := &sessionEndMarker{SessionID: strings.Repeat("a", maxSessionIDLen+1)}
-	if err := validateEndMarker(m, time.Now()); err == nil {
+	if err := validateEndMarker(m, time.Now()); !errors.Is(err, errInvalidEndMarker) {
 		t.Error("expected error for too-long session_id")
 	}
 }
 
 func TestValidateEndMarker_SessionIDInvalidChars(t *testing.T) {
 	m := &sessionEndMarker{SessionID: "bad/session/../id"}
-	if err := validateEndMarker(m, time.Now()); err == nil {
+	if err := validateEndMarker(m, time.Now()); !errors.Is(err, errInvalidEndMarker) {
 		t.Error("expected error for session_id with invalid chars")
 	}
 }
@@ -1021,7 +1022,7 @@ func TestValidateEndMarker_TranscriptPathTraversal(t *testing.T) {
 		SessionID:      "valid-id",
 		TranscriptPath: "/home/user/../secret.jsonl",
 	}
-	if err := validateEndMarker(m, time.Now()); err == nil {
+	if err := validateEndMarker(m, time.Now()); !errors.Is(err, errInvalidEndMarker) {
 		t.Error("expected error for path traversal in transcript_path")
 	}
 }
@@ -1031,7 +1032,7 @@ func TestValidateEndMarker_TranscriptPathNotJSONL(t *testing.T) {
 		SessionID:      "valid-id",
 		TranscriptPath: "/home/user/session.txt",
 	}
-	if err := validateEndMarker(m, time.Now()); err == nil {
+	if err := validateEndMarker(m, time.Now()); !errors.Is(err, errInvalidEndMarker) {
 		t.Error("expected error for non-.jsonl transcript_path")
 	}
 }
@@ -1041,7 +1042,7 @@ func TestValidateEndMarker_TranscriptPathTooLong(t *testing.T) {
 		SessionID:      "valid-id",
 		TranscriptPath: "/" + strings.Repeat("a", maxTranscriptPathLen) + ".jsonl",
 	}
-	if err := validateEndMarker(m, time.Now()); err == nil {
+	if err := validateEndMarker(m, time.Now()); !errors.Is(err, errInvalidEndMarker) {
 		t.Error("expected error for too-long transcript_path")
 	}
 }

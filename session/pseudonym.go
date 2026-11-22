@@ -5,12 +5,15 @@ import (
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 )
 
 // pseudonymKeySize is both the generated key length and the minimum length
 // accepted from WithPseudonymKey.
 const pseudonymKeySize = 32
+
+var errPseudonymKeyTooShort = errors.New("session: pseudonym key too short")
 
 // pseudonymBytes is how much of the HMAC-SHA256 output a pseudonym keeps
 // (128 bits), hex-encoded to a fixed 32-character string.
@@ -55,7 +58,7 @@ func NewPseudonymizer(opts ...PseudonymizerOption) (*Pseudonymizer, error) {
 		}
 	}
 	if len(z.key) < pseudonymKeySize {
-		return nil, fmt.Errorf("session: pseudonym key is %d bytes, need at least %d", len(z.key), pseudonymKeySize)
+		return nil, fmt.Errorf("%w: %d bytes, need at least %d", errPseudonymKeyTooShort, len(z.key), pseudonymKeySize)
 	}
 	return z, nil
 }

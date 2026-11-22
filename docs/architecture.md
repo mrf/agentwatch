@@ -154,6 +154,10 @@ safe := policy.Apply(state)
 
 `Health.LastError` is a fixed category (`monitor.LastError*` constants), never the underlying error text, so no paths or panic details can leave the monitor through it. Detailed errors go to the configured logger.
 
+### Errors
+
+Errors are wrapped with `fmt.Errorf("pkg: op: %w", err)` at every third-party boundary (`os`, `database/sql`, `encoding/json`, `bufio`), so match them with `errors.Is` / `errors.As` — `errors.Is(err, fs.ErrNotExist)`, not `os.IsNotExist(err)`, which does not unwrap. Internal failure kinds are unexported sentinels. A sentinel is exported only when a caller needs to branch on it; the current set is `jsonl.ErrFileTooLarge`. `err113` and `wrapcheck` enforce this; test files are exempt.
+
 ### Multiple sinks
 
 Use `monitor.MultiSink` to deliver events to several sinks sequentially:

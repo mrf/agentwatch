@@ -4,6 +4,7 @@ package sqlitero
 
 import (
 	"database/sql"
+	"fmt"
 	"net/url"
 	"path/filepath"
 
@@ -34,7 +35,7 @@ func DSN(path string) string {
 func Open(path string) (*sql.DB, error) {
 	db, err := sql.Open("sqlite", DSN(path))
 	if err != nil {
-		return nil, err
+		return nil, fmt.Errorf("sqlitero: open: %w", err)
 	}
 	db.SetMaxOpenConns(1)
 	return db, nil

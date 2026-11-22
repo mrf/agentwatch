@@ -197,7 +197,7 @@ type fingerprint struct {
 func statFingerprint(path string) (fingerprint, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return fingerprint{}, err
+		return fingerprint{}, fmt.Errorf("stat: %w", err)
 	}
 	fp := fingerprint{dbMtime: fi.ModTime().UnixNano(), dbSize: fi.Size()}
 	if wal, err := os.Stat(path + "-wal"); err == nil {

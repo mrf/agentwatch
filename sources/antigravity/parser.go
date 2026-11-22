@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"net/url"
 	"time"
 
@@ -78,7 +79,7 @@ func readConversation(ctx context.Context, db *sql.DB) (parseResult, error) {
 	switch {
 	case errors.Is(err, sql.ErrNoRows):
 	case err != nil:
-		return parseResult{}, err
+		return parseResult{}, fmt.Errorf("query latest step: %w", err)
 	default:
 		if lastType == stepPlannerResponse && lastStatus == statusDone {
 			r.activity = session.ActivityWaiting
@@ -134,13 +135,13 @@ func readCounts(ctx context.Context, db *sql.DB, r *parseResult) error {
 		"SELECT step_type, COUNT(*) FROM steps WHERE step_type IN (?, ?, ?) GROUP BY step_type",
 		stepUserInput, stepPlannerResponse, stepToolCall)
 	if err != nil {
-		return err
+		return fmt.Errorf("query counts: %w", err)
 	}
 	defer func() { _ = rows.Close() }()
 	for rows.Next() {
 		var typ, n int
 		if err := rows.Scan(&typ, &n); err != nil {
-			return err
+			return fmt.Errorf("scan count: %w", err)
 		}
 		switch typ {
 		case stepUserInput:
@@ -151,7 +152,10 @@ func readCounts(ctx context.Context, db *sql.DB, r *parseResult) error {
 			r.totalToolCalls = n
 		}
 	}
-	return rows.Err()
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("iterate counts: %w", err)
+	}
+	return nil
 }
 
 // latestBlob returns the single blob selected by query, or nil when no row
@@ -162,7 +166,10 @@ func latestBlob(ctx context.Context, db *sql.DB, query string, args ...any) ([]b
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
-	return b, err
+	if err != nil {
+		return nil, fmt.Errorf("query blob: %w", err)
+	}
+	return b, nil
 }
 
 // fileURIPath returns the local path of a file:// URI, or "" for anything

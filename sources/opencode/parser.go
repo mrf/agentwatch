@@ -13,6 +13,8 @@ import (
 	"github.com/mrf/agentwatch/internal/sqlitero"
 )
 
+var errInvalidCursor = errors.New("opencode: invalid cursor")
+
 // archiveState records how far the archived-session terminal report has got.
 type archiveState int
 
@@ -66,22 +68,22 @@ func decodeCursor(s string) (cursor, error) {
 	}
 	parts := strings.Split(s, ",")
 	if len(parts) != 2 && len(parts) != 6 && len(parts) != 7 {
-		return cursor{}, fmt.Errorf("opencode: invalid cursor %q", s)
+		return cursor{}, fmt.Errorf("%w %q", errInvalidCursor, s)
 	}
 	var n [7]int64
 	for i := 0; i < len(parts); i++ {
 		v, err := strconv.ParseInt(parts[i], 10, 64)
 		if err != nil {
-			return cursor{}, fmt.Errorf("opencode: invalid cursor %q: %w", s, err)
+			return cursor{}, fmt.Errorf("%w %q: %w", errInvalidCursor, s, err)
 		}
 		n[i] = v
 	}
 	archive := n[5]
 	if archive < int64(archiveNone) || archive > int64(archiveConfirmed) {
-		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: bad archive state", s)
+		return cursor{}, fmt.Errorf("%w %q: bad archive state", errInvalidCursor, s)
 	}
 	if n[6] != 0 && n[6] != 1 {
-		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: bad working flag", s)
+		return cursor{}, fmt.Errorf("%w %q: bad working flag", errInvalidCursor, s)
 	}
 	return cursor{
 		msgCount:     int(n[0]),
@@ -145,7 +147,10 @@ func discoverSessions(ctx context.Context, db *sql.DB, cutoff time.Time) ([]sess
 		}
 		sessions = append(sessions, s)
 	}
-	return sessions, rows.Err()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("opencode: iterate sessions: %w", err)
+	}
+	return sessions, nil
 }
 
 // parseResult holds data extracted from the database for a single Parse call.
