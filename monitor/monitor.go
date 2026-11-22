@@ -3,7 +3,9 @@
 package monitor
 
 import (
+	"cmp"
 	"context"
+	"slices"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -367,7 +369,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				Seq:     m.seq.Add(1),
 				At:      m.cfg.clock.Now(),
 				Type:    EventDelta,
-				Updates: updates,
+				Updates: dedupeUpdates(updates),
 				Removed: removedIDs,
 			})
 		}
@@ -632,8 +634,27 @@ func overlaySubagent(dst, src session.SubagentState) session.SubagentState {
 	return dst
 }
 
-// Snapshot returns a deep copy of all currently tracked sessions.
-// The returned slice is safe to read and mutate without affecting the monitor.
+// dedupeUpdates collapses repeated sessions in a delta to one entry per ID.
+// A session touched by both the parse loop and a sweep keeps its last state at
+// the position of its first appearance.
+func dedupeUpdates(updates []session.SessionState) []session.SessionState {
+	idx := make(map[string]int, len(updates))
+	out := make([]session.SessionState, 0, len(updates))
+	for i := 0; i < len(updates); i++ {
+		u := updates[i]
+		if at, ok := idx[u.ID]; ok {
+			out[at] = u
+			continue
+		}
+		idx[u.ID] = len(out)
+		out = append(out, u)
+	}
+	return out
+}
+
+// Snapshot returns a deep copy of all currently tracked sessions, ordered by
+// (Source, ID). The returned slice is safe to read and mutate without
+// affecting the monitor.
 func (m *Monitor) Snapshot() []session.SessionState {
 	m.mu.Lock()
 	states := make([]session.SessionState, 0, len(m.store))
@@ -641,6 +662,9 @@ func (m *Monitor) Snapshot() []session.SessionState {
 		states = append(states, s.Clone())
 	}
 	m.mu.Unlock()
+	slices.SortFunc(states, func(a, b session.SessionState) int {
+		return cmp.Or(cmp.Compare(a.Source, b.Source), cmp.Compare(a.ID, b.ID))
+	})
 	return states
 }
 
