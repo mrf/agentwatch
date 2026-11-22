@@ -6,33 +6,6 @@ import (
 	"strings"
 )
 
-// scanAntigravityProcesses returns a map from session UUID to working
-// directory by inspecting running processes and the last-conversation-id file.
-//
-// On Linux, it reads /proc/<pid>/cmdline and /proc/<pid>/cwd for each
-// process whose command line contains "agy". The active session UUID is read
-// from <root>/last-conversation-id. If exactly one agy process is running,
-// its working directory is associated with the active session UUID.
-//
-// This function is best-effort: it returns an empty map on errors or on
-// non-Linux platforms. Source-private in v1 — do not export.
-func scanAntigravityProcesses(root string) map[string]string {
-	result := make(map[string]string)
-
-	// Read the last-conversation-id to know which session is active.
-	lastID := readLastConversationID(root)
-	if lastID == "" {
-		return result
-	}
-
-	cwds := scanProcFS()
-	if len(cwds) == 1 {
-		result[lastID] = cwds[0]
-	}
-
-	return result
-}
-
 // readLastConversationID reads the last-conversation-id file from root and
 // returns the trimmed UUID string. Returns empty on any error.
 func readLastConversationID(root string) string {
@@ -67,7 +40,7 @@ func scanProcFS() []string {
 		if err != nil {
 			continue
 		}
-		if !containsAgy(cmdline) {
+		if !isAgyCmdline(cmdline) {
 			continue
 		}
 
@@ -95,15 +68,10 @@ func isNumeric(s string) bool {
 	return true
 }
 
-// containsAgy reports whether the NUL-separated cmdline slice contains
-// a field that looks like an Antigravity CLI invocation.
-func containsAgy(cmdline []byte) bool {
-	fields := strings.Split(string(cmdline), "\x00")
-	for i := 0; i < len(fields); i++ {
-		base := filepath.Base(fields[i])
-		if base == "agy" {
-			return true
-		}
-	}
-	return false
+// isAgyCmdline reports whether the NUL-separated cmdline belongs to an
+// Antigravity CLI process. Only argv[0] is considered: later arguments such
+// as `vim ~/agy` name files, not the running executable.
+func isAgyCmdline(cmdline []byte) bool {
+	argv0, _, _ := strings.Cut(string(cmdline), "\x00")
+	return argv0 != "" && filepath.Base(argv0) == "agy"
 }

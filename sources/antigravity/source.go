@@ -19,8 +19,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mrf/agentwatch/internal/filewatch"
@@ -30,12 +32,21 @@ import (
 // lastConversationFile is the file that tracks the most recent session UUID.
 const lastConversationFile = "last-conversation-id"
 
+// procCacheTTL bounds how stale the /proc scan used for working-directory
+// detection may be. Discover runs every poll; walking /proc that often is
+// wasted work for data that changes only when agy starts or exits.
+const procCacheTTL = 5 * time.Second
+
+// sessionIDPattern matches the canonical UUID stem of a session file.
+var sessionIDPattern = regexp.MustCompile(`^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$`)
+
 // Option configures an AntigravitySource.
 type Option func(*AntigravitySource)
 
 // WithRoot sets the root directory to scan for Antigravity CLI session files.
-// Discover walks this directory for *.json files, treating each file as a
-// session keyed by its filename stem (the Antigravity session UUID).
+// Discover walks this directory for <uuid>.json files, treating each file as
+// a session keyed by its filename stem (the Antigravity session UUID). Other
+// JSON files under the root are ignored.
 // If root is empty, Discover returns no sessions.
 func WithRoot(path string) Option {
 	return func(s *AntigravitySource) {
@@ -58,11 +69,19 @@ type AntigravitySource struct {
 	root   string
 	window time.Duration
 	walker *filewatch.Walker
+
+	now       func() time.Time
+	scanProcs func() []string
+
+	procMu    sync.Mutex
+	procCwds  []string
+	procAt    time.Time
+	procFresh bool
 }
 
 // New returns a new AntigravitySource configured by opts.
 func New(opts ...Option) (source.Source, error) {
-	s := &AntigravitySource{}
+	s := &AntigravitySource{now: time.Now, scanProcs: scanProcFS}
 	for i := 0; i < len(opts); i++ {
 		opts[i](s)
 	}
@@ -89,7 +108,7 @@ func Register(r *source.Registry, opts ...Option) error {
 func (s *AntigravitySource) Name() string { return "antigravity" }
 
 // Discover scans the configured root for Antigravity CLI session files.
-// Each *.json file is returned as a SessionHandle. The session ID is the
+// Each <uuid>.json file is returned as a SessionHandle. The session ID is the
 // filename stem (the UUID). WorkingDir is populated via process inspection
 // when a matching agy process is found; otherwise it is left empty.
 func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandle, error) {
@@ -102,19 +121,17 @@ func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandl
 		return nil, err
 	}
 
-	if len(entries) == 0 {
-		return nil, nil
-	}
-
-	// Build UUID -> workingDir map by inspecting running agy processes.
-	uuidToDir := scanAntigravityProcesses(s.root)
-
 	handles := make([]source.SessionHandle, 0, len(entries))
+	var uuidToDir map[string]string
 	for i := 0; i < len(entries); i++ {
 		e := entries[i]
-		// The walker already filters by *.json, so filepath.Base is always
-		// a .json filename. Extract the session UUID from the stem.
 		sessionID := strings.TrimSuffix(filepath.Base(e.Path), ".json")
+		if !sessionIDPattern.MatchString(sessionID) {
+			continue
+		}
+		if uuidToDir == nil {
+			uuidToDir = s.workingDirs()
+		}
 
 		handles = append(handles, source.SessionHandle{
 			ID:         sessionID,
@@ -124,7 +141,38 @@ func (s *AntigravitySource) Discover(ctx context.Context) ([]source.SessionHandl
 			Source:     "antigravity",
 		})
 	}
+	if len(handles) == 0 {
+		return nil, nil
+	}
 	return handles, nil
+}
+
+// workingDirs maps the active session UUID to its working directory. The
+// mapping is only unambiguous when exactly one agy process is running.
+func (s *AntigravitySource) workingDirs() map[string]string {
+	lastID := readLastConversationID(s.root)
+	if lastID == "" {
+		return nil
+	}
+	cwds := s.procWorkingDirs()
+	if len(cwds) != 1 {
+		return nil
+	}
+	return map[string]string{lastID: cwds[0]}
+}
+
+// procWorkingDirs returns the working directories of running agy processes,
+// rescanning /proc at most once per procCacheTTL.
+func (s *AntigravitySource) procWorkingDirs() []string {
+	s.procMu.Lock()
+	defer s.procMu.Unlock()
+	now := s.now()
+	if !s.procFresh || now.Sub(s.procAt) >= procCacheTTL {
+		s.procCwds = s.scanProcs()
+		s.procAt = now
+		s.procFresh = true
+	}
+	return s.procCwds
 }
 
 // Parse reads the session's JSON file and returns a SourceUpdate.
