@@ -105,8 +105,9 @@ func New(roots []string, opts ...Option) *Walker {
 }
 
 // Discover walks all configured roots and returns matching files.
-// Missing root directories are silently skipped. A cancelled context causes an
-// early return with the context error.
+// Missing root directories are silently skipped, as are unreadable or vanished
+// directories below a root. An unreadable root returns its error. A cancelled
+// context causes an early return with the context error.
 func (w *Walker) Discover(ctx context.Context) ([]Entry, error) {
 	var results []Entry
 	now := w.clock()
@@ -138,7 +139,7 @@ func (w *Walker) walkRoot(ctx context.Context, root string, now time.Time) ([]En
 	}
 
 	var results []Entry
-	if err := w.walkDir(ctx, root, now, make(map[dirID]struct{}), &results); err != nil {
+	if err := w.walkDir(ctx, root, true, now, make(map[dirID]struct{}), &results); err != nil {
 		return nil, err
 	}
 	return results, nil
@@ -147,17 +148,22 @@ func (w *Walker) walkRoot(ctx context.Context, root string, now time.Time) ([]En
 // walkDir recursively walks dir, appending matching files to results.
 // ancestors holds the identity of every directory on the current walk path; a
 // directory that is already an ancestor (a symlink loop) is not walked again.
-func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancestors map[dirID]struct{}, results *[]Entry) error {
+//
+// Only the root's errors are fatal (an unreadable root is a configuration
+// problem). Below the root, any Stat/ReadDir failure skips that directory and
+// is not cached, so it is retried on the next scan: permission errors must not
+// hide sibling sessions, and a directory removed mid-walk is a normal race.
+func (w *Walker) walkDir(ctx context.Context, dir string, isRoot bool, now time.Time, ancestors map[dirID]struct{}, results *[]Entry) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
 
 	info, err := os.Stat(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		if isRoot && !os.IsNotExist(err) {
+			return err
 		}
-		return err
+		return nil
 	}
 	id, ok := identify(dir, info)
 	if !ok {
@@ -193,7 +199,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 		// this directory's mtime. Always recurse into known subdirectories so
 		// changes deep in the tree are not missed.
 		for _, sub := range snap.subdirs {
-			if err := w.walkDir(ctx, sub, now, ancestors, results); err != nil {
+			if err := w.walkDir(ctx, sub, false, now, ancestors, results); err != nil {
 				return err
 			}
 		}
@@ -203,10 +209,10 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 	// Directory changed (or first visit): read entries and update cache.
 	des, err := os.ReadDir(dir)
 	if err != nil {
-		if os.IsNotExist(err) {
-			return nil
+		if isRoot && !os.IsNotExist(err) {
+			return err
 		}
-		return err
+		return nil
 	}
 
 	var (
@@ -233,7 +239,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 			if target.IsDir() {
 				if w.followSymlinks && !w.skips(fullPath) {
 					subdirs = append(subdirs, fullPath)
-					if err := w.walkDir(ctx, fullPath, now, ancestors, results); err != nil {
+					if err := w.walkDir(ctx, fullPath, false, now, ancestors, results); err != nil {
 						return err
 					}
 				}
@@ -248,7 +254,7 @@ func (w *Walker) walkDir(ctx context.Context, dir string, now time.Time, ancesto
 				continue
 			}
 			subdirs = append(subdirs, fullPath)
-			if err := w.walkDir(ctx, fullPath, now, ancestors, results); err != nil {
+			if err := w.walkDir(ctx, fullPath, false, now, ancestors, results); err != nil {
 				return err
 			}
 			continue

@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 	"time"
 )
@@ -67,5 +68,40 @@ func TestDiscover_AppendedFileStaysInWindow(t *testing.T) {
 	}
 	if handles[0].StartedAt.Before(now.Add(-time.Second)) {
 		t.Errorf("StartedAt = %v, want fresh mtime near %v", handles[0].StartedAt, now)
+	}
+}
+
+// TestDiscover_UnreadableProjectDirKeepsSiblings verifies that one project
+// directory the process cannot read does not fail discovery for the rest.
+func TestDiscover_UnreadableProjectDirKeepsSiblings(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Geteuid() == 0 {
+		t.Skip("permission bits are not enforced here")
+	}
+	root := t.TempDir()
+	for _, p := range []string{"-tmp-a", "-tmp-locked", "-tmp-z"} {
+		dir := filepath.Join(root, p)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "sess.jsonl"), []byte("{}\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	locked := filepath.Join(root, "-tmp-locked")
+	if err := os.Chmod(locked, 0o000); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0o755) })
+
+	src, err := New(WithRoot(root))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handles, err := src.Discover(context.Background())
+	if err != nil {
+		t.Fatalf("Discover: %v", err)
+	}
+	if len(handles) != 2 {
+		t.Fatalf("got %d handles, want 2 (siblings of the unreadable dir)", len(handles))
 	}
 }
