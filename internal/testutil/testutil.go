@@ -4,7 +4,6 @@ package testutil
 
 import (
 	"bytes"
-	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -70,5 +69,5 @@ func NewLogger(t testing.TB) (*slog.Logger, *bytes.Buffer) {
 // DiscardLogger returns an *slog.Logger that silently discards all output.
 // Use it when a logger is required but log output is irrelevant to the test.
 func DiscardLogger() *slog.Logger {
-	return slog.New(slog.NewTextHandler(io.Discard, nil))
+	return slog.New(slog.DiscardHandler)
 }

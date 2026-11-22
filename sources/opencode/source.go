@@ -93,13 +93,13 @@ func (s *Source) closeLocked() error {
 // the database file does not exist. Callers hold s.mu.
 func (s *Source) acquireLocked() (*sql.DB, error) {
 	if s.dbPath == "" {
-		return nil, nil
+		return nil, nil //nolint:nilnil // (nil, nil) is the documented "no database yet" result
 	}
 	info, err := os.Stat(s.dbPath)
 	if err != nil {
 		_ = s.closeLocked()
 		if os.IsNotExist(err) {
-			return nil, nil
+			return nil, nil //nolint:nilnil // (nil, nil) is the documented "no database yet" result
 		}
 		return nil, fmt.Errorf("opencode: stat %s: %w", s.dbPath, err)
 	}
@@ -178,13 +178,14 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	}
 
 	activity := session.ActivityIdle
-	if result.terminal {
+	switch {
+	case result.terminal:
 		activity = session.ActivityTerminal
-	} else if result.toolDelta > 0 {
+	case result.toolDelta > 0:
 		activity = session.ActivityWorking
-	} else if result.msgDelta > 0 && result.lastRole == "user" {
+	case result.msgDelta > 0 && result.lastRole == "user":
 		activity = session.ActivityWaiting
-	} else if result.msgDelta > 0 {
+	case result.msgDelta > 0:
 		activity = session.ActivityWorking
 	}
 
