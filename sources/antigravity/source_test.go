@@ -245,12 +245,81 @@ func TestParse_CorruptFileAdvancesCursor(t *testing.T) {
 	}
 }
 
-func TestParse_MalformedCursorReparses(t *testing.T) {
+func TestParse_MalformedCursorResets(t *testing.T) {
 	c := newConvDB(t, t.TempDir(), testID)
 	c.addStep(stepUserInput, statusDone, stepMeta(at(0)))
-	u, _ := parse(t, newTestSource(t), c, "garbage,1")
-	if u.MessageCountDelta != 1 {
-		t.Errorf("MessageCountDelta = %d, want 1", u.MessageCountDelta)
+	c.addStep(stepToolCall, 1, toolMeta(at(1), "edit_file"))
+	for _, bad := range []source.Cursor{"garbage,1", "1,2,3,4,x,6", "1,2,3,4,5"} {
+		u, next := parse(t, newTestSource(t), c, bad)
+		if !u.Reset {
+			t.Errorf("cursor %q: Reset = false, want true", bad)
+		}
+		if u.SessionID != testID {
+			t.Errorf("cursor %q: SessionID = %q, want %q", bad, u.SessionID, testID)
+		}
+		if u.MessageCountDelta != 1 || u.ToolCallCountDelta != 1 {
+			t.Errorf("cursor %q: totals = %d, %d; want 1, 1", bad, u.MessageCountDelta, u.ToolCallCountDelta)
+		}
+		if next == bad || next == "" {
+			t.Errorf("cursor %q: not replaced by a valid cursor (%q)", bad, next)
+		}
+	}
+}
+
+func TestParse_MalformedCursorOnCorruptFileKeepsCursor(t *testing.T) {
+	path := filepath.Join(t.TempDir(), testID+".db")
+	if err := os.WriteFile(path, []byte("{not sqlite"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := source.SessionHandle{ID: testID, Path: path}
+	_, cur, err := newTestSource(t).Parse(context.Background(), h, "garbage")
+	if err == nil {
+		t.Fatal("expected error for corrupt DB")
+	}
+	if cur != "garbage" {
+		t.Errorf("cursor = %q, want the malformed cursor kept so a later read resets", cur)
+	}
+}
+
+func TestParse_EmptyCursorIsNotReset(t *testing.T) {
+	c := newConvDB(t, t.TempDir(), testID)
+	c.addStep(stepUserInput, statusDone, stepMeta(at(0)))
+	u, _ := parse(t, newTestSource(t), c, "")
+	if u.Reset {
+		t.Error("first parse with an empty cursor set Reset")
+	}
+}
+
+func TestParse_ShrunkDBResets(t *testing.T) {
+	c := newConvDB(t, t.TempDir(), testID)
+	c.addStep(stepUserInput, statusDone, stepMeta(at(0)))
+	c.addStep(stepPlannerResponse, statusDone, plannerMeta(at(1), 100, 10, 0))
+	c.addStep(stepToolCall, 1, toolMeta(at(2), "edit_file"))
+	c.addStep(stepPlannerResponse, statusDone, plannerMeta(at(3), 120, 12, 0))
+	s := newTestSource(t)
+	u, cur := parse(t, s, c, "")
+	if u.MessageCountDelta != 3 || u.ToolCallCountDelta != 1 {
+		t.Fatalf("setup totals = %d, %d; want 3, 1", u.MessageCountDelta, u.ToolCallCountDelta)
+	}
+
+	// Drop the last two steps: totals fall to 2 messages and 0 tool calls.
+	c.exec("DELETE FROM steps WHERE idx >= 2")
+	u, next := parse(t, s, c, cur)
+	if !u.Reset {
+		t.Fatal("Reset = false after DB shrank below the cursor")
+	}
+	if u.SessionID != testID {
+		t.Errorf("SessionID = %q, want %q", u.SessionID, testID)
+	}
+	if u.MessageCountDelta != 2 || u.ToolCallCountDelta != 0 {
+		t.Errorf("totals = %d, %d; want 2, 0", u.MessageCountDelta, u.ToolCallCountDelta)
+	}
+
+	// Growth after the reset is an ordinary delta again.
+	c.addStep(stepUserInput, statusDone, stepMeta(at(4)))
+	u, _ = parse(t, s, c, next)
+	if u.Reset || u.MessageCountDelta != 1 {
+		t.Errorf("after reset: Reset=%v MessageCountDelta=%d; want false, 1", u.Reset, u.MessageCountDelta)
 	}
 }
 

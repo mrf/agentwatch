@@ -145,8 +145,8 @@ func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c
 	if err != nil {
 		return source.SourceUpdate{}, c, err
 	}
-	prev, prevMsgs, prevTools := decodeCursor(c)
-	if prev == fp {
+	prev, prevMsgs, prevTools, ok := decodeCursor(c)
+	if ok && prev == fp {
 		return source.SourceUpdate{}, c, nil
 	}
 
@@ -155,6 +155,11 @@ func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c
 		if ctx.Err() != nil {
 			return source.SourceUpdate{}, c, err
 		}
+		if !ok {
+			// Keep the unreadable cursor so the next successful read still
+			// resets; advancing would pair zero totals with a valid cursor.
+			return source.SourceUpdate{}, c, fmt.Errorf("antigravity: read %s: %w", filepath.Base(h.Path), err)
+		}
 		// Advance past the unreadable state so it is not retried until the
 		// files change; the monitor's health tracking surfaces the failure.
 		next := encodeCursor(fp, prevMsgs, prevTools)
@@ -162,10 +167,17 @@ func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c
 	}
 
 	totalMsgs := r.totalUserMsgs + r.totalModelMsgs
-	msgDelta := max(totalMsgs-prevMsgs, 0)
-	toolDelta := max(r.totalToolCalls-prevTools, 0)
 	next := encodeCursor(fp, totalMsgs, r.totalToolCalls)
-	return buildUpdate(r, h.ID, h.WorkingDir, msgDelta, toolDelta), next, nil
+
+	// A non-empty cursor we cannot read, or a conversation that now holds
+	// fewer messages or tool calls than the cursor recorded, means the
+	// database was replaced or truncated: report absolute totals as a Reset.
+	if !ok || totalMsgs < prevMsgs || r.totalToolCalls < prevTools {
+		u := buildUpdate(r, h.ID, h.WorkingDir, totalMsgs, r.totalToolCalls)
+		u.Reset = true
+		return u, next, nil
+	}
+	return buildUpdate(r, h.ID, h.WorkingDir, totalMsgs-prevMsgs, r.totalToolCalls-prevTools), next, nil
 }
 
 func readFile(ctx context.Context, path string) (parseResult, error) {
@@ -200,20 +212,24 @@ func encodeCursor(fp fingerprint, msgs, tools int) source.Cursor {
 	return source.Cursor(fmt.Sprintf("%d,%d,%d,%d,%d,%d", fp.dbMtime, fp.dbSize, fp.walMtime, fp.walSize, msgs, tools))
 }
 
-// decodeCursor parses the cursor produced by encodeCursor. An empty or
-// malformed cursor returns zeros, causing a full re-read.
-func decodeCursor(c source.Cursor) (fp fingerprint, msgs, tools int) {
+// decodeCursor parses the cursor produced by encodeCursor. The empty cursor
+// is a valid "nothing parsed yet" state (zero totals, ok); a malformed one
+// returns ok == false so the caller can report a Reset.
+func decodeCursor(c source.Cursor) (fp fingerprint, msgs, tools int, ok bool) {
+	if c == "" {
+		return fingerprint{}, 0, 0, true
+	}
 	parts := strings.Split(string(c), ",")
 	if len(parts) != 6 {
-		return fingerprint{}, 0, 0
+		return fingerprint{}, 0, 0, false
 	}
 	var n [6]int64
 	for i := 0; i < len(parts); i++ {
 		v, err := strconv.ParseInt(parts[i], 10, 64)
 		if err != nil {
-			return fingerprint{}, 0, 0
+			return fingerprint{}, 0, 0, false
 		}
 		n[i] = v
 	}
-	return fingerprint{dbMtime: n[0], dbSize: n[1], walMtime: n[2], walSize: n[3]}, int(n[4]), int(n[5])
+	return fingerprint{dbMtime: n[0], dbSize: n[1], walMtime: n[2], walSize: n[3]}, int(n[4]), int(n[5]), true
 }
