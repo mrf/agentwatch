@@ -68,25 +68,8 @@ func readConversation(ctx context.Context, db *sql.DB) (parseResult, error) {
 		return parseResult{}, err
 	}
 
-	// The latest conversational step decides activity. A finished planner
-	// response ends the turn even if an earlier backgrounded tool is still
-	// marked running.
-	var lastType, lastStatus int
-	var lastMeta []byte
-	err := db.QueryRowContext(ctx,
-		"SELECT step_type, status, metadata FROM steps WHERE step_type IN (?, ?, ?) ORDER BY idx DESC LIMIT 1",
-		stepUserInput, stepPlannerResponse, stepToolCall).Scan(&lastType, &lastStatus, &lastMeta)
-	switch {
-	case errors.Is(err, sql.ErrNoRows):
-	case err != nil:
-		return parseResult{}, fmt.Errorf("query latest step: %w", err)
-	default:
-		if lastType == stepPlannerResponse && lastStatus == statusDone {
-			r.activity = session.ActivityWaiting
-		} else {
-			r.activity = session.ActivityWorking
-		}
-		r.lastActivityAt, _ = pbTimestamp(lastMeta, stepCreatedAt...)
+	if err := readLatestStep(ctx, db, &r); err != nil {
+		return parseResult{}, err
 	}
 
 	toolMeta, err := latestBlob(ctx, db, latestStepMetadata, stepToolCall)
@@ -101,14 +84,7 @@ func readConversation(ctx context.Context, db *sql.DB) (parseResult, error) {
 	if err != nil {
 		return parseResult{}, err
 	}
-	if _, ok := pbBytes(plannerMeta, usagePresent...); ok {
-		in, _ := pbVarint(plannerMeta, usageInput...)
-		cached, _ := pbVarint(plannerMeta, usageCachedInput...)
-		out, _ := pbVarint(plannerMeta, usageOutput...)
-		r.hasTokens = true
-		r.contextTokens = int(in + cached) //nolint:gosec // token counts fit in int
-		r.outputTokens = int(out)          //nolint:gosec // token counts fit in int
-	}
+	applyUsage(plannerMeta, &r)
 
 	execMeta, err := latestBlob(ctx, db, "SELECT data FROM executor_metadata ORDER BY idx DESC LIMIT 1")
 	if err != nil {
@@ -128,6 +104,44 @@ func readConversation(ctx context.Context, db *sql.DB) (parseResult, error) {
 	r.startedAt, _ = pbTimestamp(trajMeta, metaCreatedAt...)
 
 	return r, nil
+}
+
+// readLatestStep sets activity and last activity time from the latest
+// conversational step. A finished planner response ends the turn even if an
+// earlier backgrounded tool is still marked running.
+func readLatestStep(ctx context.Context, db *sql.DB, r *parseResult) error {
+	var lastType, lastStatus int
+	var lastMeta []byte
+	err := db.QueryRowContext(ctx,
+		"SELECT step_type, status, metadata FROM steps WHERE step_type IN (?, ?, ?) ORDER BY idx DESC LIMIT 1",
+		stepUserInput, stepPlannerResponse, stepToolCall).Scan(&lastType, &lastStatus, &lastMeta)
+	switch {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return fmt.Errorf("query latest step: %w", err)
+	default:
+		if lastType == stepPlannerResponse && lastStatus == statusDone {
+			r.activity = session.ActivityWaiting
+		} else {
+			r.activity = session.ActivityWorking
+		}
+		r.lastActivityAt, _ = pbTimestamp(lastMeta, stepCreatedAt...)
+	}
+	return nil
+}
+
+// applyUsage copies the token usage of the latest planner response, if it
+// carries one, into r.
+func applyUsage(plannerMeta []byte, r *parseResult) {
+	if _, ok := pbBytes(plannerMeta, usagePresent...); !ok {
+		return
+	}
+	in, _ := pbVarint(plannerMeta, usageInput...)
+	cached, _ := pbVarint(plannerMeta, usageCachedInput...)
+	out, _ := pbVarint(plannerMeta, usageOutput...)
+	r.hasTokens = true
+	r.contextTokens = int(in + cached) //nolint:gosec // token counts fit in int
+	r.outputTokens = int(out)          //nolint:gosec // token counts fit in int
 }
 
 func readCounts(ctx context.Context, db *sql.DB, r *parseResult) error {

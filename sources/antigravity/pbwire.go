@@ -25,31 +25,11 @@ func pbFind(msg []byte, num uint64) (wire uint64, payload []byte, ok bool) {
 			return 0, nil, false
 		}
 		msg = msg[n:]
-		var size int
-		switch tag & 7 {
-		case wireVarint:
-			if _, n := binary.Uvarint(msg); n > 0 {
-				size = n
-			} else {
-				return 0, nil, false
-			}
-		case wireFixed64:
-			size = 8
-		case wireFixed32:
-			size = 4
-		case wireBytes:
-			l, n := binary.Uvarint(msg)
-			if n <= 0 {
-				return 0, nil, false
-			}
-			msg = msg[n:]
-			if l > uint64(len(msg)) {
-				return 0, nil, false
-			}
-			size = int(l) //nolint:gosec // l <= len(msg), checked above
-		default:
+		prefix, size, ok := pbValueSize(tag&7, msg)
+		if !ok {
 			return 0, nil, false
 		}
+		msg = msg[prefix:]
 		if size > len(msg) {
 			return 0, nil, false
 		}
@@ -59,6 +39,28 @@ func pbFind(msg []byte, num uint64) (wire uint64, payload []byte, ok bool) {
 		msg = msg[size:]
 	}
 	return 0, nil, false
+}
+
+// pbValueSize returns, for a value of wire type wire starting at msg, the
+// length-prefix bytes before its payload and the payload size.
+func pbValueSize(wire uint64, msg []byte) (prefix, size int, ok bool) {
+	switch wire {
+	case wireVarint:
+		if _, n := binary.Uvarint(msg); n > 0 {
+			return 0, n, true
+		}
+	case wireFixed64:
+		return 0, 8, true
+	case wireFixed32:
+		return 0, 4, true
+	case wireBytes:
+		l, n := binary.Uvarint(msg)
+		if n <= 0 || l > uint64(len(msg[n:])) {
+			return 0, 0, false
+		}
+		return n, int(l), true //nolint:gosec // l <= len(msg[n:]), checked above
+	}
+	return 0, 0, false
 }
 
 // pbDescend follows path through nested messages. An empty path returns msg.

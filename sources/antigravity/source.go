@@ -155,15 +155,8 @@ func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c
 		if ctx.Err() != nil {
 			return source.SourceUpdate{}, c, err
 		}
-		if !ok {
-			// Keep the unreadable cursor so the next successful read still
-			// resets; advancing would pair zero totals with a valid cursor.
-			return source.SourceUpdate{}, c, fmt.Errorf("antigravity: read %s: %w", filepath.Base(h.Path), err)
-		}
-		// Advance past the unreadable state so it is not retried until the
-		// files change; the monitor's health tracking surfaces the failure.
-		next := encodeCursor(fp, prevMsgs, prevTools)
-		return source.SourceUpdate{}, next, fmt.Errorf("antigravity: read %s: %w", filepath.Base(h.Path), err)
+		return source.SourceUpdate{}, readFailedCursor(c, ok, fp, prevMsgs, prevTools),
+			fmt.Errorf("antigravity: read %s: %w", filepath.Base(h.Path), err)
 	}
 
 	totalMsgs := r.totalUserMsgs + r.totalModelMsgs
@@ -178,6 +171,18 @@ func (s *AntigravitySource) Parse(ctx context.Context, h source.SessionHandle, c
 		return u, next, nil
 	}
 	return buildUpdate(r, h.ID, h.WorkingDir, totalMsgs-prevMsgs, r.totalToolCalls-prevTools), next, nil
+}
+
+// readFailedCursor returns the cursor to persist after a failed read. An
+// unreadable cursor c is kept so the next successful read still resets;
+// advancing would pair zero totals with a valid cursor. Otherwise the cursor
+// advances past the unreadable state so it is not retried until the files
+// change; the monitor's health tracking surfaces the failure.
+func readFailedCursor(c source.Cursor, cursorOK bool, fp fingerprint, prevMsgs, prevTools int) source.Cursor {
+	if !cursorOK {
+		return c
+	}
+	return encodeCursor(fp, prevMsgs, prevTools)
 }
 
 func readFile(ctx context.Context, path string) (parseResult, error) {
