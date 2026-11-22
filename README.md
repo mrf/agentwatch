@@ -140,6 +140,7 @@ type State struct {
     CurrentTool        string
     MessageCount       int
     ToolCallCount      int
+    CompactionCount    int
     StartedAt          time.Time
     LastActivityAt     time.Time
     LastDataReceivedAt time.Time
