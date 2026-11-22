@@ -91,7 +91,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 
 		src := m.cfg.sources[i]
 		srcName := src.Name()
-		parseFailCount := 0
+		parseFailed := make(map[string]struct{})
 
 		handles, err := src.Discover(ctx)
 		if err != nil {
@@ -100,9 +100,8 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				"error", err,
 			)
 
-			if h, changed := m.recordHealthFailure(srcName, func(sh *sourceHealth) {
-				sh.discoverFailures++
-				sh.lastError = sanitizeError(err.Error())
+			if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
+				sh.recordDiscoverFailure(sanitizeError(err.Error()), threshold)
 			}); changed {
 				healthEvents = append(healthEvents, h)
 			}
@@ -137,7 +136,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 					"session", h.ID,
 					"error", parseErr,
 				)
-				parseFailCount++
+				parseFailed[h.ID] = struct{}{}
 				continue
 			}
 
@@ -225,17 +224,15 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		}
 
 		// Update health for this source after processing all handles.
-		if parseFailCount > 0 {
-			if h, changed := m.recordHealthFailure(srcName, func(sh *sourceHealth) {
-				sh.parseFailures += parseFailCount
-				sh.lastError = sanitizeError("parse failure")
-			}); changed {
-				healthEvents = append(healthEvents, h)
-			}
-		} else {
-			if h, changed := m.recordHealthSuccess(srcName); changed {
-				healthEvents = append(healthEvents, h)
-			}
+		handleIDs := make([]string, 0, len(handles))
+		for j := 0; j < len(handles); j++ {
+			handleIDs = append(handleIDs, handles[j].ID)
+		}
+		if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
+			sh.recordDiscoverSuccess(threshold)
+			sh.recordParses(handleIDs, parseFailed, threshold)
+		}); changed {
+			healthEvents = append(healthEvents, h)
 		}
 	}
 
@@ -426,7 +423,7 @@ func (m *Monitor) emitEvent(ctx context.Context, ev Event) {
 func (m *Monitor) getOrCreateHealth(name string) *sourceHealth {
 	sh, ok := m.health[name]
 	if !ok {
-		sh = &sourceHealth{status: HealthHealthy}
+		sh = newSourceHealth()
 		m.health[name] = sh
 	}
 	return sh
@@ -439,40 +436,22 @@ func (m *Monitor) snapshotHealth(name string, sh *sourceHealth) Health {
 		Source:           name,
 		Status:           sh.status,
 		DiscoverFailures: sh.discoverFailures,
-		ParseFailures:    sh.parseFailures,
+		ParseFailures:    len(sh.parse),
 		LastError:        sh.lastError,
 		UpdatedAt:        sh.updatedAt,
 	}
 }
 
-// recordHealthFailure applies fn to the source's health state (fn should
-// increment failure counters and set lastError), recomputes the status, and
-// returns a snapshot plus whether the status changed. Thread-safe.
-func (m *Monitor) recordHealthFailure(name string, fn func(*sourceHealth)) (Health, bool) {
-	m.mu.Lock()
-	sh := m.getOrCreateHealth(name)
-	prev := sh.status
-	fn(sh)
-	sh.updatedAt = m.cfg.clock.Now()
-	sh.status = computeStatus(sh.totalFailures(), m.cfg.healthThreshold)
-	changed := sh.status != prev
-	snapshot := m.snapshotHealth(name, sh)
-	m.mu.Unlock()
-	return snapshot, changed
-}
-
-// recordHealthSuccess resets a source's health counters after a fully
-// successful poll and returns a snapshot plus whether the status changed.
+// updateHealth applies fn to the source's health state under m.mu, recomputes
+// its status, and returns a snapshot plus whether the status changed.
 // Thread-safe.
-func (m *Monitor) recordHealthSuccess(name string) (Health, bool) {
+func (m *Monitor) updateHealth(name string, fn func(sh *sourceHealth, threshold int)) (Health, bool) {
 	m.mu.Lock()
 	sh := m.getOrCreateHealth(name)
 	prev := sh.status
-	sh.discoverFailures = 0
-	sh.parseFailures = 0
-	sh.lastError = ""
+	fn(sh, m.cfg.healthThreshold)
 	sh.updatedAt = m.cfg.clock.Now()
-	sh.status = computeStatus(sh.totalFailures(), m.cfg.healthThreshold)
+	sh.refresh()
 	changed := sh.status != prev
 	snapshot := m.snapshotHealth(name, sh)
 	m.mu.Unlock()

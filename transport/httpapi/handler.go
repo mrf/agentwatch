@@ -131,7 +131,11 @@ func (h *handler) getHealthz(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	writeJSON(w, http.StatusOK, healthzResponse{
+	code := http.StatusOK
+	if overall == monitor.HealthFailed {
+		code = http.StatusServiceUnavailable
+	}
+	writeJSON(w, code, healthzResponse{
 		Status:  overall,
 		Sources: sources,
 	})

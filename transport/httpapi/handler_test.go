@@ -239,6 +239,72 @@ func TestHandler_Healthz_AfterPoll(t *testing.T) {
 	}
 }
 
+// buildMonitorWithStatus polls a monitor whose only source ends in the given
+// health status (threshold 1: one discover failure degrades, two fail).
+func buildMonitorWithStatus(t *testing.T, want monitor.HealthStatus) *monitor.Monitor {
+	t.Helper()
+	src := mock.New(mock.WithName("mock"))
+	mon, err := monitor.New(monitor.WithSources(src), monitor.WithHealthThreshold(1))
+	if err != nil {
+		t.Fatalf("monitor.New: %v", err)
+	}
+	failures := map[monitor.HealthStatus]int{
+		monitor.HealthHealthy:  0,
+		monitor.HealthDegraded: 1,
+		monitor.HealthFailed:   2,
+	}[want]
+	if failures == 0 {
+		if err := mon.PollOnce(context.Background()); err != nil {
+			t.Fatalf("PollOnce: %v", err)
+		}
+	}
+	for i := 0; i < failures; i++ {
+		src.QueueDiscoverError(io.ErrUnexpectedEOF)
+		if err := mon.PollOnce(context.Background()); err != nil {
+			t.Fatalf("PollOnce: %v", err)
+		}
+	}
+	if got := mon.Health()["mock"].Status; got != want {
+		t.Fatalf("setup: source status = %q, want %q", got, want)
+	}
+	return mon
+}
+
+func TestHandler_Healthz_StatusCode(t *testing.T) {
+	tests := []struct {
+		status   monitor.HealthStatus
+		wantCode int
+	}{
+		{monitor.HealthHealthy, http.StatusOK},
+		{monitor.HealthDegraded, http.StatusOK},
+		{monitor.HealthFailed, http.StatusServiceUnavailable},
+	}
+	for _, tt := range tests {
+		t.Run(string(tt.status), func(t *testing.T) {
+			h, err := httpapi.NewHandler(buildMonitorWithStatus(t, tt.status))
+			if err != nil {
+				t.Fatalf("NewHandler: %v", err)
+			}
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, newLocalRequest("/healthz", nil))
+
+			if w.Code != tt.wantCode {
+				t.Fatalf("code = %d, want %d", w.Code, tt.wantCode)
+			}
+			assertContentTypeJSON(t, w)
+			var resp struct {
+				Status string `json:"status"`
+			}
+			if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+				t.Fatalf("decode: %v", err)
+			}
+			if resp.Status != string(tt.status) {
+				t.Errorf("body status = %q, want %q", resp.Status, tt.status)
+			}
+		})
+	}
+}
+
 func TestHandler_Sources(t *testing.T) {
 	src := mock.New(mock.WithName("testSource"))
 	mon, err := monitor.New(monitor.WithSources(src))
