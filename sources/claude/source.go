@@ -109,11 +109,17 @@ type consumedMarker struct {
 }
 
 // claudeCursor is the JSON-encoded cursor format for the ClaudeSource.
-// It persists both the file byte offset and the cross-batch subagent
-// parent map so that tool_result completion can be detected across parse calls.
+// It persists the file byte offset plus cross-batch subagent state, so that
+// tool_result completion and subagent counts carry across parse calls.
 type claudeCursor struct {
-	Offset  int64             `json:"offset"`
-	Parents map[string]string `json:"parents,omitempty"` // parentToolUseID -> toolUseID
+	Offset    int64                    `json:"offset"`
+	Parents   map[string]string        `json:"parents,omitempty"`   // parentToolUseID -> toolUseID
+	Subagents map[string]subagentEntry `json:"subagents,omitempty"` // subagent ID -> cumulative state
+
+	// The parent's last reported token counts, re-sent on subagent-only
+	// updates because the monitor overwrites tokens on every update.
+	ContextTokens int `json:"ctx,omitempty"`
+	OutputTokens  int `json:"out,omitempty"`
 }
 
 // ClaudeSource discovers and parses Claude Code JSONL session files.
@@ -176,6 +182,9 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
+		if d.IsDir() && isSubagentsDir(s.root, path) {
+			return fs.SkipDir // attached to the parent by Parse
+		}
 		if d.IsDir() || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
 		}
@@ -213,8 +222,12 @@ func (s *ClaudeSource) Discover(ctx context.Context) ([]source.SessionHandle, er
 }
 
 // Parse reads new JSONL lines from the session file starting at cursor c and
-// returns an incremental SourceUpdate. The cursor encodes a byte offset and
-// the subagent parent map; an empty cursor starts from the beginning.
+// returns an incremental SourceUpdate. The cursor encodes a byte offset plus
+// cumulative subagent state; an empty cursor starts from the beginning.
+//
+// Subagent transcripts under <session-id>/subagents/ are read on every call
+// and reported in Subagents (cumulative, only those that changed). A change
+// confined to subagent files still yields an update for the parent.
 //
 // If a session-end marker for h.ID is found in the configured sessionEndDir,
 // the returned SourceUpdate has Terminal=true and EndReason populated.
@@ -242,91 +255,97 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 		s.drainEndMarkers(time.Now())
 	}
 
-	if len(lines) == 0 {
-		// No new JSONL data. Check if there's a pending terminal for this session.
-		if cm, ok := s.consumePendingTerminal(h.ID); ok {
-			update := source.SourceUpdate{
-				SessionID: h.ID,
-				Terminal:  true,
-				EndReason: cm.reason,
-				EndedAt:   cm.endedAt,
-			}
-			nextCursor, _ := encodeCursor(claudeCursor{Offset: nextOffset, Parents: cc.Parents})
-			return update, nextCursor, nil
-		}
-		if nextOffset != cc.Offset {
-			// Every line consumed was skipped as oversized: advance past
-			// them so the next poll does not re-scan.
-			nextCursor, _ := encodeCursor(claudeCursor{Offset: nextOffset, Parents: cc.Parents})
-			return source.SourceUpdate{}, nextCursor, nil
-		}
-		return source.SourceUpdate{}, c, nil
-	}
+	// Subagent files are read before the parent's lines so that a tool_result
+	// in this batch can complete a subagent first seen in this poll.
+	touched, dirty := readSubagentFiles(h.Path, &cc)
 
-	result := parseLinesWithParents(lines, cc.Parents)
-	nextParents := buildParentMap(result.subagents)
-
-	// Merge prior parents with new ones (new parse results take precedence).
-	mergedParents := cc.Parents
-	if len(nextParents) > 0 {
-		mergedParents = make(map[string]string, len(cc.Parents)+len(nextParents))
-		for k, v := range cc.Parents {
-			mergedParents[k] = v
-		}
-		for k, v := range nextParents {
-			mergedParents[k] = v
+	var result parseResult
+	if len(lines) > 0 {
+		result = parseLinesWithParents(lines, cc.knownParents())
+		cc.Parents = mergeParents(cc.Parents, buildParentMap(result.subagents))
+		batch := buildSubagentStates(result.subagents)
+		for i := 0; i < len(batch); i++ {
+			id := batch[i].ID
+			entry := cc.Subagents[id]
+			entry.State = accumulateSubagent(entry.State, batch[i])
+			cc.putSubagent(id, entry)
+			touched[id] = struct{}{}
 		}
 	}
+	if nextOffset != cc.Offset {
+		dirty = true
+	}
+	cc.Offset = nextOffset
 
-	nextCursor, _ := encodeCursor(claudeCursor{Offset: nextOffset, Parents: mergedParents})
-
-	if !result.hasData {
-		// Check for a terminal even when there was no meaningful JSONL data.
-		if cm, ok := s.consumePendingTerminal(h.ID); ok {
-			update := source.SourceUpdate{
-				SessionID: h.ID,
-				Terminal:  true,
-				EndReason: cm.reason,
-				EndedAt:   cm.endedAt,
-			}
-			return update, nextCursor, nil
+	var update source.SourceUpdate
+	if result.hasData {
+		sessionID := result.sessionID
+		if sessionID == "" {
+			sessionID = h.ID
 		}
-		return source.SourceUpdate{}, nextCursor, nil
+		update = source.SourceUpdate{
+			SessionID:            sessionID,
+			Slug:                 result.slug,
+			Activity:             result.activity,
+			Model:                result.model,
+			ContextTokens:        result.contextTokens,
+			OutputTokens:         result.outputTokens,
+			MessageCountDelta:    result.msgDelta,
+			ToolCallCountDelta:   result.toolDelta,
+			CompactionCountDelta: result.compactionDelta,
+			CurrentTool:          result.currentTool,
+			WorkingDir:           result.cwd,
+			Branch:               result.branch,
+			LastActivityAt:       result.lastActivityAt,
+		}
+		if !result.startedAt.IsZero() {
+			update.StartedAt = result.startedAt
+		}
+		cc.ContextTokens = result.contextTokens
+		cc.OutputTokens = result.outputTokens
 	}
 
-	sessionID := result.sessionID
-	if sessionID == "" {
-		sessionID = h.ID
+	if len(touched) > 0 {
+		if update.SessionID == "" {
+			update.SessionID = h.ID
+			update.ContextTokens = cc.ContextTokens
+			update.OutputTokens = cc.OutputTokens
+		}
+		update.Subagents = cc.subagentStates(touched)
 	}
 
-	update := source.SourceUpdate{
-		SessionID:            sessionID,
-		Slug:                 result.slug,
-		Activity:             result.activity,
-		Model:                result.model,
-		ContextTokens:        result.contextTokens,
-		OutputTokens:         result.outputTokens,
-		MessageCountDelta:    result.msgDelta,
-		ToolCallCountDelta:   result.toolDelta,
-		CompactionCountDelta: result.compactionDelta,
-		CurrentTool:          result.currentTool,
-		WorkingDir:           result.cwd,
-		Branch:               result.branch,
-		LastActivityAt:       result.lastActivityAt,
-		Subagents:            buildSubagentStates(result.subagents),
-	}
-	if !result.startedAt.IsZero() {
-		update.StartedAt = result.startedAt
-	}
-
-	// Attach terminal state if a marker was found for this session.
-	if cm, ok := s.consumePendingTerminal(sessionID); ok {
+	// Keyed by the handle, never by the records' sessionId: subagent
+	// transcripts carry their parent's sessionId.
+	if cm, ok := s.consumePendingTerminal(h.ID); ok {
+		if update.SessionID == "" {
+			update.SessionID = h.ID
+		}
 		update.Terminal = true
 		update.EndReason = cm.reason
 		update.EndedAt = cm.endedAt
 	}
 
+	if !dirty {
+		return update, c, nil
+	}
+	nextCursor, _ := encodeCursor(cc)
 	return update, nextCursor, nil
+}
+
+// mergeParents returns prior with next's entries added (next takes
+// precedence). prior is returned unchanged when next is empty.
+func mergeParents(prior, next map[string]string) map[string]string {
+	if len(next) == 0 {
+		return prior
+	}
+	merged := make(map[string]string, len(prior)+len(next))
+	for k, v := range prior {
+		merged[k] = v
+	}
+	for k, v := range next {
+		merged[k] = v
+	}
+	return merged
 }
 
 // drainEndMarkers scans the sessionEndDir for end-marker files, validates
@@ -530,10 +549,10 @@ func absDuration(d time.Duration) time.Duration {
 }
 
 // encodeCursor converts a claudeCursor to an opaque source.Cursor string.
-// Falls back to a plain decimal offset string if the cursor has no parents
+// Falls back to a plain decimal offset string when only the offset is set
 // (for compact, backward-compatible output).
 func encodeCursor(cc claudeCursor) (source.Cursor, error) {
-	if len(cc.Parents) == 0 {
+	if len(cc.Parents) == 0 && len(cc.Subagents) == 0 && cc.ContextTokens == 0 && cc.OutputTokens == 0 {
 		return source.Cursor(strconv.FormatInt(cc.Offset, 10)), nil
 	}
 	data, err := json.Marshal(cc)
