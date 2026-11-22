@@ -103,26 +103,11 @@ func parseLine(line []byte, firstLine bool, a *accumulator) {
 		return // skip malformed lines
 	}
 
-	// Track timestamps: first seen becomes startedAt, latest becomes lastActivityAt.
-	if e.Timestamp != "" {
-		t, err := time.Parse(time.RFC3339, e.Timestamp)
-		if err == nil {
-			if a.startedAt.IsZero() {
-				a.startedAt = t
-			}
-			a.lastActivityAt = t
-		}
-	}
+	a.noteTimestamp(e.Timestamp)
 
 	switch e.Type {
 	case "session":
-		// Session header is always the first line. Capture session ID and working dir.
-		if e.ID != "" {
-			a.sessionID = e.ID
-		}
-		if e.WorkingDir != "" {
-			a.workingDir = e.WorkingDir
-		}
+		a.parseSessionHeader(&e)
 
 	case "message":
 		if len(e.Message) == 0 {
@@ -139,6 +124,33 @@ func parseLine(line []byte, firstLine bool, a *accumulator) {
 	_ = firstLine // used via startedAt tracking above
 }
 
+// noteTimestamp tracks timestamps: first seen becomes startedAt, latest
+// becomes lastActivityAt.
+func (a *accumulator) noteTimestamp(ts string) {
+	if ts == "" {
+		return
+	}
+	t, err := time.Parse(time.RFC3339, ts)
+	if err != nil {
+		return
+	}
+	if a.startedAt.IsZero() {
+		a.startedAt = t
+	}
+	a.lastActivityAt = t
+}
+
+// parseSessionHeader captures the session ID and working dir from the session
+// header, which is always the first line.
+func (a *accumulator) parseSessionHeader(e *piEntry) {
+	if e.ID != "" {
+		a.sessionID = e.ID
+	}
+	if e.WorkingDir != "" {
+		a.workingDir = e.WorkingDir
+	}
+}
+
 func parseMessage(raw json.RawMessage, a *accumulator) {
 	var msg agentMessage
 	if json.Unmarshal(raw, &msg) != nil {
@@ -150,25 +162,7 @@ func parseMessage(raw json.RawMessage, a *accumulator) {
 		a.activity = session.ActivityWorking
 
 	case "assistant":
-		a.messageDelta++
-		// toolUse (or no stop reason yet) means the turn continues; any other
-		// stop reason ends it.
-		if msg.StopReason == "" || msg.StopReason == "toolUse" {
-			a.activity = session.ActivityWorking
-		} else {
-			a.activity = session.ActivityWaiting
-		}
-		if msg.Model != "" {
-			a.model = msg.Model
-		}
-		// Usage is decoded separately so an unreadable usage object costs
-		// only the token counts, not the whole message.
-		var usage tokenUsage
-		if len(msg.Usage) > 0 && json.Unmarshal(msg.Usage, &usage) == nil {
-			a.hasTokens = true
-			a.contextTokens = usage.Input + usage.CacheRead + usage.CacheWrite
-			a.outputTokens = usage.Output
-		}
+		a.parseAssistant(&msg)
 
 	case "toolResult":
 		a.toolCallDelta++
@@ -181,5 +175,27 @@ func parseMessage(raw json.RawMessage, a *accumulator) {
 		a.toolCallDelta++
 		a.activity = session.ActivityWorking
 		a.currentTool = bashToolName
+	}
+}
+
+func (a *accumulator) parseAssistant(msg *agentMessage) {
+	a.messageDelta++
+	// toolUse (or no stop reason yet) means the turn continues; any other
+	// stop reason ends it.
+	if msg.StopReason == "" || msg.StopReason == "toolUse" {
+		a.activity = session.ActivityWorking
+	} else {
+		a.activity = session.ActivityWaiting
+	}
+	if msg.Model != "" {
+		a.model = msg.Model
+	}
+	// Usage is decoded separately so an unreadable usage object costs
+	// only the token counts, not the whole message.
+	var usage tokenUsage
+	if len(msg.Usage) > 0 && json.Unmarshal(msg.Usage, &usage) == nil {
+		a.hasTokens = true
+		a.contextTokens = usage.Input + usage.CacheRead + usage.CacheWrite
+		a.outputTokens = usage.Output
 	}
 }
