@@ -103,8 +103,8 @@ func TestParseLinesToolSession(t *testing.T) {
 		t.Errorf("toolCallDelta: got %d, want 2", acc.toolCallDelta)
 	}
 	// last tool was bashExecution
-	if acc.currentTool != "Bash" {
-		t.Errorf("currentTool: got %q, want %q", acc.currentTool, "Bash")
+	if acc.currentTool != bashToolName {
+		t.Errorf("currentTool: got %q, want %q", acc.currentTool, bashToolName)
 	}
 	// contextTokens = input(200) + cacheRead(10) + cacheWrite(5) = 215
 	if acc.contextTokens != 215 {
@@ -243,8 +243,8 @@ func TestParseLineBashExecution(t *testing.T) {
 	if acc.toolCallDelta != 1 {
 		t.Errorf("toolCallDelta: got %d, want 1", acc.toolCallDelta)
 	}
-	if acc.currentTool != "Bash" {
-		t.Errorf("currentTool: got %q, want %q", acc.currentTool, "Bash")
+	if acc.currentTool != bashToolName {
+		t.Errorf("currentTool: got %q, want %q", acc.currentTool, bashToolName)
 	}
 	if acc.activity != session.ActivityWorking {
 		t.Errorf("activity: got %q, want %q", acc.activity, session.ActivityWorking)

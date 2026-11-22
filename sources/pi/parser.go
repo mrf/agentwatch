@@ -8,6 +8,9 @@ import (
 	"github.com/mrf/agentwatch/source"
 )
 
+// bashToolName is the tool name reported for bashExecution entries.
+const bashToolName = "Bash"
+
 // piEntry is the top-level shape of every Pi JSONL record.
 // All entries share id, parentId, and timestamp; type-specific fields vary.
 type piEntry struct {
@@ -173,6 +176,6 @@ func parseMessage(raw json.RawMessage, a *accumulator) {
 	case "bashExecution":
 		a.toolCallDelta++
 		a.activity = session.ActivityWorking
-		a.currentTool = "Bash"
+		a.currentTool = bashToolName
 	}
 }

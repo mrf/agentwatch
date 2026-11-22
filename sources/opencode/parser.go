@@ -78,7 +78,8 @@ func decodeCursor(s string) (cursor, error) {
 		}
 		n[i] = v
 	}
-	if n[5] < int64(archiveNone) || n[5] > int64(archiveConfirmed) {
+	archive := n[5]
+	if archive < int64(archiveNone) || archive > int64(archiveConfirmed) {
 		return cursor{}, fmt.Errorf("opencode: invalid cursor %q: bad archive state", s)
 	}
 	if n[6] != 0 && n[6] != 1 {
@@ -90,7 +91,7 @@ func decodeCursor(s string) (cursor, error) {
 		tokensInput:  int(n[2]),
 		tokensOutput: int(n[3]),
 		lastActivity: n[4],
-		archive:      archiveState(n[5]),
+		archive:      archiveState(archive),
 		working:      n[6] == 1,
 		seen:         true,
 	}, nil
