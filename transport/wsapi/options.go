@@ -27,6 +27,7 @@ type serverConfig struct {
 	allowedOrigins          []string
 	localhostOriginsAnyPort bool
 	allowedHosts            []string
+	trustedProxies          []string
 	maxConnections          int
 	heartbeat               time.Duration
 	sendBuffer              int
@@ -40,13 +41,14 @@ type serverConfig struct {
 
 func defaultServerConfig() serverConfig {
 	return serverConfig{
-		heartbeat:    30 * time.Second,
-		sendBuffer:   64,
-		writeTimeout: 10 * time.Second,
-		rateLimit:    12,
-		rateBurst:    4,
-		rateWindow:   time.Minute,
-		logger:       slog.Default(),
+		maxConnections: 64,
+		heartbeat:      30 * time.Second,
+		sendBuffer:     64,
+		writeTimeout:   10 * time.Second,
+		rateLimit:      12,
+		rateBurst:      4,
+		rateWindow:     time.Minute,
+		logger:         slog.Default(),
 	}
 }
 
@@ -90,7 +92,7 @@ func WithAllowedHosts(hosts []string) Option {
 }
 
 // WithMaxConnections sets the maximum number of concurrent WebSocket connections.
-// Zero means unlimited.
+// Defaults to 64. Zero means unlimited.
 func WithMaxConnections(n int) Option {
 	return func(c *serverConfig) {
 		c.maxConnections = n
@@ -131,6 +133,17 @@ func WithRateLimit(limit, burst int, window time.Duration) Option {
 		c.rateLimit = limit
 		c.rateBurst = burst
 		c.rateWindow = window
+	}
+}
+
+// WithTrustedProxies sets the reverse proxies whose X-Forwarded-For and
+// X-Real-IP headers are honored for per-client rate limiting. Entries are IP
+// addresses or CIDR prefixes; NewServer returns an error for an invalid one.
+// By default no proxy is trusted and clients are keyed on the connection's
+// remote address, so forwarding headers cannot be spoofed to evade the limit.
+func WithTrustedProxies(proxies []string) Option {
+	return func(c *serverConfig) {
+		c.trustedProxies = proxies
 	}
 }
 

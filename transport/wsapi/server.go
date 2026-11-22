@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"net/netip"
 	"sync"
 	"time"
 
@@ -24,6 +25,7 @@ type Server struct {
 	cfg         serverConfig
 	bcast       *broadcaster
 	rateLimiter *clientRateLimiter
+	trusted     []netip.Prefix
 	logger      *slog.Logger
 
 	mu      sync.Mutex
@@ -38,11 +40,17 @@ func NewServer(mon *monitor.Monitor, opts ...Option) (*Server, error) {
 		o(&cfg)
 	}
 
+	trusted, err := parseTrustedProxies(cfg.trustedProxies)
+	if err != nil {
+		return nil, err
+	}
+
 	s := &Server{
 		mon:         mon,
 		cfg:         cfg,
 		bcast:       newBroadcaster(cfg.maxConnections, cfg.policy, cfg.logger),
 		rateLimiter: newClientRateLimiter(cfg.rateLimit, cfg.rateWindow, cfg.rateBurst),
+		trusted:     trusted,
 		logger:      cfg.logger,
 	}
 
@@ -75,7 +83,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	// Rate limit check.
 	if s.rateLimiter != nil {
-		decision := s.rateLimiter.Allow(clientAddress(r))
+		decision := s.rateLimiter.Allow(clientAddress(r, s.trusted))
 		if !decision.Allowed {
 			http.Error(w, "rate limit exceeded", http.StatusTooManyRequests)
 			return

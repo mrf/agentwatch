@@ -1,13 +1,19 @@
 package wsapi
 
 import (
+	"fmt"
 	"math"
 	"net"
 	"net/http"
+	"net/netip"
 	"strings"
 	"sync"
 	"time"
 )
+
+// maxRateLimitClients bounds the bucket map so distinct client keys cannot
+// grow it without limit between idle sweeps.
+const maxRateLimitClients = 4096
 
 // rateLimitDecision reports whether a request was allowed and when to retry.
 type rateLimitDecision struct {
@@ -18,13 +24,14 @@ type rateLimitDecision struct {
 // clientRateLimiter implements a per-client token bucket rate limiter.
 // Ported from agent-racer backend/internal/ws/ratelimit.go.
 type clientRateLimiter struct {
-	mu        sync.Mutex
-	now       func() time.Time
-	rate      float64
-	burst     float64
-	idleTTL   time.Duration
-	lastSweep time.Time
-	clients   map[string]clientTokenBucket
+	mu         sync.Mutex
+	now        func() time.Time
+	rate       float64
+	burst      float64
+	idleTTL    time.Duration
+	lastSweep  time.Time
+	maxClients int
+	clients    map[string]clientTokenBucket
 }
 
 type clientTokenBucket struct {
@@ -40,12 +47,13 @@ func newClientRateLimiter(limit int, window time.Duration, burst int) *clientRat
 
 	now := time.Now()
 	return &clientRateLimiter{
-		now:       time.Now,
-		rate:      float64(limit) / window.Seconds(),
-		burst:     float64(burst),
-		idleTTL:   2 * window,
-		lastSweep: now,
-		clients:   make(map[string]clientTokenBucket),
+		now:        time.Now,
+		rate:       float64(limit) / window.Seconds(),
+		burst:      float64(burst),
+		idleTTL:    2 * window,
+		lastSweep:  now,
+		maxClients: maxRateLimitClients,
+		clients:    make(map[string]clientTokenBucket),
 	}
 }
 
@@ -63,6 +71,9 @@ func (l *clientRateLimiter) Allow(clientID string) rateLimitDecision {
 
 	bucket, ok := l.clients[clientID]
 	if !ok {
+		if len(l.clients) >= l.maxClients {
+			l.evictLeastRecentlySeen()
+		}
 		bucket = clientTokenBucket{
 			tokens:   l.burst,
 			last:     now,
@@ -109,28 +120,86 @@ func (l *clientRateLimiter) sweep(now time.Time) {
 	l.lastSweep = now
 }
 
-// clientAddress extracts the client IP from an HTTP request.
-func clientAddress(r *http.Request) string {
-	if forwarded := strings.TrimSpace(r.Header.Get("X-Forwarded-For")); forwarded != "" {
-		// X-Forwarded-For: client, proxy1, proxy2 — take the leftmost.
-		ip := strings.TrimSpace(strings.SplitN(forwarded, ",", 2)[0])
-		if ip != "" {
-			return ip
+func (l *clientRateLimiter) evictLeastRecentlySeen() {
+	var oldestKey string
+	var oldest time.Time
+	first := true
+	for key, bucket := range l.clients {
+		if first || bucket.lastSeen.Before(oldest) {
+			oldestKey, oldest, first = key, bucket.lastSeen, false
 		}
 	}
+	delete(l.clients, oldestKey)
+}
 
-	if realIP := strings.TrimSpace(r.Header.Get("X-Real-IP")); realIP != "" {
-		return realIP
+// parseTrustedProxies parses IP addresses and CIDR prefixes.
+func parseTrustedProxies(entries []string) ([]netip.Prefix, error) {
+	prefixes := make([]netip.Prefix, 0, len(entries))
+	for i := 0; i < len(entries); i++ {
+		entry := strings.TrimSpace(entries[i])
+		if strings.Contains(entry, "/") {
+			prefix, err := netip.ParsePrefix(entry)
+			if err != nil {
+				return nil, fmt.Errorf("wsapi: invalid trusted proxy %q: %w", entry, err)
+			}
+			prefixes = append(prefixes, prefix.Masked())
+			continue
+		}
+		addr, err := netip.ParseAddr(entry)
+		if err != nil {
+			return nil, fmt.Errorf("wsapi: invalid trusted proxy %q: %w", entry, err)
+		}
+		addr = addr.Unmap()
+		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()))
+	}
+	return prefixes, nil
+}
+
+func isTrusted(addr netip.Addr, trusted []netip.Prefix) bool {
+	addr = addr.Unmap()
+	for i := 0; i < len(trusted); i++ {
+		if trusted[i].Contains(addr) {
+			return true
+		}
+	}
+	return false
+}
+
+// clientAddress derives the rate-limit key for a request: the RemoteAddr
+// host, unless that host is a trusted proxy, in which case the forwarding
+// headers are honored. X-Forwarded-For is walked right to left and the first
+// untrusted hop wins; entries left of it were supplied by the client.
+func clientAddress(r *http.Request, trusted []netip.Prefix) string {
+	remote := strings.TrimSpace(r.RemoteAddr)
+	host, _, err := net.SplitHostPort(remote)
+	if err != nil || host == "" {
+		host = remote
+	}
+	if host == "" {
+		return "unknown"
 	}
 
-	host, _, err := net.SplitHostPort(strings.TrimSpace(r.RemoteAddr))
-	if err == nil && host != "" {
+	remoteAddr, err := netip.ParseAddr(host)
+	if err != nil || !isTrusted(remoteAddr, trusted) {
 		return host
 	}
 
-	if trimmed := strings.TrimSpace(r.RemoteAddr); trimmed != "" {
-		return trimmed
+	if forwarded := r.Header.Values("X-Forwarded-For"); len(forwarded) > 0 {
+		hops := strings.Split(strings.Join(forwarded, ","), ",")
+		for i := len(hops) - 1; i >= 0; i-- {
+			hop, err := netip.ParseAddr(strings.TrimSpace(hops[i]))
+			if err != nil {
+				return host
+			}
+			if !isTrusted(hop, trusted) || i == 0 {
+				return hop.Unmap().String()
+			}
+		}
 	}
 
-	return "unknown"
+	if realIP, err := netip.ParseAddr(strings.TrimSpace(r.Header.Get("X-Real-IP"))); err == nil {
+		return realIP.Unmap().String()
+	}
+
+	return host
 }
