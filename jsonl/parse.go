@@ -119,26 +119,11 @@ type EntryVisitor func(entry *Entry, line []byte) bool
 // Files exceeding MaxFileSize are rejected with ErrFileTooLarge. Lines exceeding
 // MaxLineSize are skipped with a warning log and parsing continues.
 func ForEachEntry(path string, offset int64, visitor EntryVisitor) (int64, error) {
-	f, err := os.Open(path)
+	f, err := openAt(path, offset)
 	if err != nil {
-		return offset, fmt.Errorf("jsonl: open: %w", err)
+		return offset, err
 	}
 	defer func() { _ = f.Close() }()
-
-	info, err := f.Stat()
-	if err != nil {
-		return offset, fmt.Errorf("jsonl: stat: %w", err)
-	}
-	if info.Size() > MaxFileSize {
-		slog.Warn("skipping oversized file", "pkg", "agentwatch/jsonl", "path", path, "size", info.Size(), "limit", MaxFileSize)
-		return offset, fmt.Errorf("%w: size %d exceeds max %d", ErrFileTooLarge, info.Size(), MaxFileSize)
-	}
-
-	if offset > 0 {
-		if _, err = f.Seek(offset, io.SeekStart); err != nil {
-			return offset, fmt.Errorf("jsonl: seek: %w", err)
-		}
-	}
 
 	reader := bufio.NewReader(f)
 	parsedOffset := offset
@@ -154,45 +139,65 @@ func ForEachEntry(path string, offset int64, visitor EntryVisitor) (int64, error
 			break
 		}
 
-		// Only process complete lines (ending with newline).
-		if line[len(line)-1] != '\n' {
-			if readErr == io.EOF {
-				break
-			}
-			continue
-		}
-
-		// Skip oversized lines.
-		if len(line) > MaxLineSize {
-			slog.Warn("skipping oversized line", "pkg", "agentwatch/jsonl", "path", path, "bytes", len(line), "offset", parsedOffset)
-			parsedOffset += int64(len(line))
-			if readErr == io.EOF {
-				break
-			}
-			continue
-		}
-
-		lineData := line[:len(line)-1]
-
-		var entry Entry
-		if jsonErr := json.Unmarshal(lineData, &entry); jsonErr != nil {
-			parsedOffset += int64(len(line))
-			if readErr == io.EOF {
-				break
-			}
-			continue
-		}
-
-		parsedOffset += int64(len(line))
-
-		if !visitor(&entry, lineData) {
-			break
-		}
-
-		if readErr == io.EOF {
+		consumed, stop := visitLine(path, line, parsedOffset, visitor)
+		parsedOffset += consumed
+		if stop || readErr == io.EOF {
 			break
 		}
 	}
 
 	return parsedOffset, nil
+}
+
+// openAt opens path, rejects it if it exceeds MaxFileSize, and seeks to offset.
+func openAt(path string, offset int64) (*os.File, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("jsonl: open: %w", err)
+	}
+
+	info, err := f.Stat()
+	if err != nil {
+		_ = f.Close()
+		return nil, fmt.Errorf("jsonl: stat: %w", err)
+	}
+	if info.Size() > MaxFileSize {
+		_ = f.Close()
+		slog.Warn("skipping oversized file", "pkg", "agentwatch/jsonl", "path", path, "size", info.Size(), "limit", MaxFileSize)
+		return nil, fmt.Errorf("%w: size %d exceeds max %d", ErrFileTooLarge, info.Size(), MaxFileSize)
+	}
+
+	if offset > 0 {
+		if _, err = f.Seek(offset, io.SeekStart); err != nil {
+			_ = f.Close()
+			return nil, fmt.Errorf("jsonl: seek: %w", err)
+		}
+	}
+	return f, nil
+}
+
+// visitLine handles one line read at offset. It returns the bytes consumed
+// (zero for an incomplete trailing line, which is re-read once complete) and
+// whether visitor asked to stop. Oversized and unparseable lines are consumed
+// without visiting.
+func visitLine(path string, line []byte, offset int64, visitor EntryVisitor) (consumed int64, stop bool) {
+	// Only process complete lines (ending with newline).
+	if line[len(line)-1] != '\n' {
+		return 0, false
+	}
+
+	// Skip oversized lines.
+	if len(line) > MaxLineSize {
+		slog.Warn("skipping oversized line", "pkg", "agentwatch/jsonl", "path", path, "bytes", len(line), "offset", offset)
+		return int64(len(line)), false
+	}
+
+	lineData := line[:len(line)-1]
+
+	var entry Entry
+	if jsonErr := json.Unmarshal(lineData, &entry); jsonErr != nil {
+		return int64(len(line)), false
+	}
+
+	return int64(len(line)), !visitor(&entry, lineData)
 }
