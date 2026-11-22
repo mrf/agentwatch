@@ -141,7 +141,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	// No new complete lines: return the zero SourceUpdate the monitor treats
 	// as "no new data" so idle polls don't refresh the session's liveness.
 	if len(lines) == 0 && !reset {
-		return source.SourceUpdate{}, next, nil
+		return source.SourceUpdate{SkippedLines: res.Skipped}, next, nil
 	}
 
 	// An unparseable cursor already reports reset, so its zero value is moot.
@@ -157,6 +157,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 	update := acc.toUpdate()
 	update.SessionID = h.ID
 	update.Reset = reset
+	update.SkippedLines = res.Skipped
 	return update, next, nil
 }
 

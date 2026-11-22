@@ -142,6 +142,7 @@ func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cur
 
 	update := acc.toUpdate()
 	update.WorkingDir = h.WorkingDir
+	update.SkippedLines = res.Skipped
 	if len(lines) > 0 || reset {
 		update.SessionID = h.ID
 		update.Reset = reset

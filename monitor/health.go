@@ -33,8 +33,13 @@ type Health struct {
 	// It is never free text from the underlying error, so it cannot carry
 	// paths or panic details; the detailed error goes to the monitor's
 	// logger only.
-	LastError string    `json:"lastError,omitempty"`
-	UpdatedAt time.Time `json:"updatedAt"`
+	LastError string `json:"lastError,omitempty"`
+	// SkippedLines is the running total of oversized lines the source has
+	// skipped since the monitor started. It is informational: it never
+	// changes Status or LastError, and a source that re-reads a truncated or
+	// replaced file may count the same line again.
+	SkippedLines int       `json:"skippedLines,omitempty"`
+	UpdatedAt    time.Time `json:"updatedAt"`
 }
 
 // Fixed values of Health.LastError.
@@ -84,6 +89,7 @@ type sourceHealth struct {
 	discoverLevel     HealthStatus // sticky until discoverSuccesses reaches threshold
 	parse             map[string]*sessionParseHealth
 	lastError         string
+	skippedLines      int // cumulative; informational only
 	status            HealthStatus
 	updatedAt         time.Time
 }

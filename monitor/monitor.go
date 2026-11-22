@@ -94,6 +94,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		src := m.cfg.sources[i]
 		srcName := src.Name()
 		parseFailed := make(map[string]struct{})
+		skipped := 0
 
 		handles, err := src.Discover(ctx)
 		if err != nil {
@@ -153,6 +154,10 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 				parseFailed[h.ID] = struct{}{}
 				continue
 			}
+
+			// Counted before the no-data shortcut: a batch of only oversized
+			// lines has no SessionID but still happened.
+			skipped += update.SkippedLines
 
 			// No new data — zero SourceUpdate per the source contract.
 			if update.SessionID == "" {
@@ -248,6 +253,7 @@ func (m *Monitor) PollOnce(ctx context.Context) error {
 		if h, changed := m.updateHealth(srcName, func(sh *sourceHealth, threshold int) {
 			sh.recordDiscoverSuccess(threshold)
 			sh.recordParses(handleIDs, parseFailed, threshold)
+			sh.skippedLines += skipped
 		}); changed {
 			healthEvents = append(healthEvents, h)
 		}
@@ -440,6 +446,7 @@ func (m *Monitor) snapshotHealth(name string, sh *sourceHealth) Health {
 		DiscoverFailures: sh.discoverFailures,
 		ParseFailures:    len(sh.parse),
 		LastError:        sh.lastError,
+		SkippedLines:     sh.skippedLines,
 		UpdatedAt:        sh.updatedAt,
 	}
 }

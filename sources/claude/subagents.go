@@ -55,18 +55,19 @@ func subagentFileID(name string) (string, bool) {
 
 // readSubagentFiles reads new lines from every subagent file belonging to the
 // parent transcript at parentPath, folding them into cc.Subagents. It returns
-// the IDs whose state changed (never nil) and whether any file offset advanced.
-// Unreadable files are skipped and retried on the next poll.
-func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]struct{}, advanced bool) {
+// the IDs whose state changed (never nil), whether any file offset advanced,
+// and how many oversized lines were skipped. Unreadable files are skipped and
+// retried on the next poll.
+func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]struct{}, advanced bool, skipped int) {
 	touched = make(map[string]struct{})
 	stem, ok := strings.CutSuffix(parentPath, ".jsonl")
 	if !ok {
-		return touched, false
+		return touched, false, 0
 	}
 	dir := filepath.Join(stem, subagentsDirName)
 	entries, err := os.ReadDir(dir)
 	if err != nil {
-		return touched, false
+		return touched, false, 0
 	}
 
 	for _, de := range entries {
@@ -92,6 +93,7 @@ func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]
 			advanced = true
 		}
 		entry.Position = next
+		skipped += res.Skipped
 		lines := res.Lines
 		entry.State.ID = id
 		if entry.State.ParentID == "" {
@@ -105,7 +107,7 @@ func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]
 		}
 		cc.putSubagent(id, entry)
 	}
-	return touched, advanced
+	return touched, advanced, skipped
 }
 
 func (cc *claudeCursor) putSubagent(id string, e subagentEntry) {
