@@ -3,6 +3,7 @@ package httpapi_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -302,6 +303,40 @@ func TestHandler_Healthz_StatusCode(t *testing.T) {
 				t.Errorf("body status = %q, want %q", resp.Status, tt.status)
 			}
 		})
+	}
+}
+
+func TestHandler_Healthz_LastErrorIsFixedCategory(t *testing.T) {
+	src := mock.New(mock.WithName("mock"))
+	mon, err := monitor.New(monitor.WithSources(src), monitor.WithHealthThreshold(1))
+	if err != nil {
+		t.Fatalf("monitor.New: %v", err)
+	}
+	src.QueueDiscoverError(errors.New(`scan /home/u/My Projects/x and C:\Users\Jane Doe\y: read/write`))
+	if err := mon.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+	h, err := httpapi.NewHandler(mon)
+	if err != nil {
+		t.Fatalf("NewHandler: %v", err)
+	}
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, newLocalRequest("/healthz", nil))
+
+	body := w.Body.String()
+	for _, frag := range []string{"home", "Projects", "Users", "Jane", "read", `\\`} {
+		if strings.Contains(body, frag) {
+			t.Errorf("healthz body leaks %q: %s", frag, body)
+		}
+	}
+	var resp struct {
+		Sources []monitor.Health `json:"sources"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if len(resp.Sources) != 1 || resp.Sources[0].LastError != monitor.LastErrorDiscover {
+		t.Fatalf("sources = %+v, want one with LastError %q", resp.Sources, monitor.LastErrorDiscover)
 	}
 }
 

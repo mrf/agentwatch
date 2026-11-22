@@ -4,7 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"strings"
+	"io/fs"
 	"testing"
 	"time"
 
@@ -381,43 +381,51 @@ func TestHealth_ErrorSanitization(t *testing.T) {
 	}
 
 	tests := []struct {
-		name     string
-		errMsg   string
-		wantLack string // substring that must NOT appear
+		name string
+		err  error
+		want string
 	}{
-		{
-			name:     "absolute path redacted",
-			errMsg:   "open /home/user/.config/claude/sessions/abc.jsonl: no such file",
-			wantLack: "/home/user",
-		},
-		{
-			name:     "windows path redacted",
-			errMsg:   `open C:\Users\dev\sessions\abc.jsonl: access denied`,
-			wantLack: `C:\Users`,
-		},
-		{
-			name:     "panic details redacted",
-			errMsg:   "panic: runtime error: index out of range [5] with length 3\ngoroutine 1 [running]:\nmain.main()\n\t/home/user/project/main.go:42",
-			wantLack: "goroutine",
-		},
+		{"unix path", errors.New("open /home/user/.config/claude/sessions/abc.jsonl: no such file"), monitor.LastErrorDiscover},
+		{"unix path with spaces", errors.New("open /home/u/My Projects/x/abc.jsonl: bad"), monitor.LastErrorDiscover},
+		{"windows path", errors.New(`open C:\Users\dev\sessions\abc.jsonl: access denied`), monitor.LastErrorDiscover},
+		{"windows path forward slashes spaces", errors.New("open c:/Users/Jane Doe/sessions/abc.jsonl: denied"), monitor.LastErrorDiscover},
+		{"ordinary slash text", errors.New("read/write conflict"), monitor.LastErrorDiscover},
+		{"panic details", errors.New("panic: runtime error: index out of range [5] with length 3\ngoroutine 1 [running]:\nmain.main()\n\t/home/user/project/main.go:42"), monitor.LastErrorDiscover},
+		{"not exist", &fs.PathError{Op: "open", Path: "/home/u/My Projects/x", Err: fs.ErrNotExist}, monitor.LastErrorDiscoverNotFound},
+		{"permission", fmt.Errorf("scan: %w", &fs.PathError{Op: "open", Path: `D:\Jane Doe\x`, Err: fs.ErrPermission}), monitor.LastErrorDiscoverPermission},
+		{"deadline", fmt.Errorf("discover /home/u/x: %w", context.DeadlineExceeded), monitor.LastErrorDiscoverTimeout},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			clk.Advance(time.Second)
-			src.QueueDiscoverError(errors.New(tt.errMsg))
+			src.QueueDiscoverError(tt.err)
 			if err := m.PollOnce(ctx); err != nil {
 				t.Fatalf("PollOnce: %v", err)
 			}
 
-			h := m.Health()["test"]
-			if h.LastError == "" {
-				t.Fatal("LastError should not be empty after failure")
-			}
-			if strings.Contains(h.LastError, tt.wantLack) {
-				t.Errorf("LastError %q should not contain %q", h.LastError, tt.wantLack)
+			if got := m.Health()["test"].LastError; got != tt.want {
+				t.Errorf("LastError = %q, want fixed category %q", got, tt.want)
 			}
 		})
+	}
+}
+
+func TestHealth_ParseFailureCategory(t *testing.T) {
+	t.Parallel()
+	src := mock.New(mock.WithName("test"))
+	src.SetHandles([]source.SessionHandle{{ID: "s1", Source: "test"}})
+	src.QueueParseResult("s1", source.SourceUpdate{}, "", errors.New("decode /home/u/My Projects/s1.jsonl: read/write"))
+
+	m, err := monitor.New(monitor.WithSources(src), monitor.WithHealthThreshold(1))
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	if err := m.PollOnce(context.Background()); err != nil {
+		t.Fatalf("PollOnce: %v", err)
+	}
+	if got := m.Health()["test"].LastError; got != monitor.LastErrorParse {
+		t.Errorf("LastError = %q, want %q", got, monitor.LastErrorParse)
 	}
 }
 
