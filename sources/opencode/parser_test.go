@@ -1,6 +1,7 @@
 package opencode
 
 import (
+	"context"
 	"database/sql"
 	"testing"
 	"time"
@@ -9,7 +10,10 @@ import (
 // ---- cursor -----------------------------------------------------------------
 
 func TestCursorRoundTrip(t *testing.T) {
-	c := cursor{msgCount: 42, toolCount: 7}
+	c := cursor{
+		msgCount: 42, toolCount: 7, tokensInput: 900, tokensOutput: 31,
+		lastActivity: 1768471800000000000, archive: archivePending, seen: true,
+	}
 	encoded := encodeCursor(c)
 	decoded, err := decodeCursor(encoded)
 	if err != nil {
@@ -31,7 +35,7 @@ func TestDecodeCursorEmpty(t *testing.T) {
 }
 
 func TestDecodeCursorInvalid(t *testing.T) {
-	cases := []string{"abc", "1", "1,2,3", "x,1", "1,x"}
+	cases := []string{"abc", "1", "1,2,3", "x,1", "1,x", "1,2,3,4,5,x", "1,2,3,4,5,3", "1,2,3,4,5,-1"}
 	for _, tc := range cases {
 		_, err := decodeCursor(tc)
 		if err == nil {
@@ -128,7 +132,7 @@ func TestDiscoverSessionsAll(t *testing.T) {
 		`{"id":"claude-sonnet-4-20250514"}`, 1000, 200,
 		"2026-01-15T10:00:00Z", "2026-01-15T10:30:00Z", "")
 
-	sessions, err := discoverSessions(db, time.Time{})
+	sessions, err := discoverSessions(context.Background(), db, time.Time{})
 	if err != nil {
 		t.Fatalf("discoverSessions: %v", err)
 	}
@@ -150,7 +154,7 @@ func TestDiscoverSessionsWithCutoff(t *testing.T) {
 		"2026-01-15T10:00:00Z", "2026-01-15T10:30:00Z", "")
 
 	cutoff := time.Date(2025, 1, 1, 0, 0, 0, 0, time.UTC)
-	sessions, err := discoverSessions(db, cutoff)
+	sessions, err := discoverSessions(context.Background(), db, cutoff)
 	if err != nil {
 		t.Fatalf("discoverSessions: %v", err)
 	}
@@ -185,7 +189,7 @@ func TestQueryParseDataBasic(t *testing.T) {
 		`{"type":"tool-invocation","toolName":"Read","args":{},"result":"content","state":"completed"}`,
 		"2026-01-15T10:01:02Z", "2026-01-15T10:01:02Z")
 
-	result, newCur, err := queryParseData(db, "sess-1", cursor{})
+	result, newCur, err := queryParseData(context.Background(), db, "sess-1", cursor{})
 	if err != nil {
 		t.Fatalf("queryParseData: %v", err)
 	}
@@ -246,8 +250,8 @@ func TestQueryParseDataDelta(t *testing.T) {
 		"2026-01-15T10:01:00Z", "2026-01-15T10:01:00Z")
 
 	// Simulate having already seen 1 message and 0 tool calls.
-	prev := cursor{msgCount: 1, toolCount: 0}
-	result, newCur, err := queryParseData(db, "sess-1", prev)
+	prev := cursor{msgCount: 1, toolCount: 0, tokensInput: 100, tokensOutput: 10, lastActivity: time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC).UnixNano(), seen: true}
+	result, newCur, err := queryParseData(context.Background(), db, "sess-1", prev)
 	if err != nil {
 		t.Fatalf("queryParseData: %v", err)
 	}
@@ -275,8 +279,8 @@ func TestQueryParseDataNoDelta(t *testing.T) {
 		"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z")
 
 	// Cursor already reflects current state.
-	prev := cursor{msgCount: 1, toolCount: 0}
-	result, _, err := queryParseData(db, "sess-1", prev)
+	prev := cursor{msgCount: 1, toolCount: 0, tokensInput: 100, tokensOutput: 10, lastActivity: time.Date(2026, 1, 15, 10, 0, 0, 0, time.UTC).UnixNano(), seen: true}
+	result, _, err := queryParseData(context.Background(), db, "sess-1", prev)
 	if err != nil {
 		t.Fatalf("queryParseData: %v", err)
 	}
@@ -290,7 +294,7 @@ func TestQueryParseDataNoDelta(t *testing.T) {
 
 func TestQueryParseDataNoSession(t *testing.T) {
 	db := createTestDB(t)
-	result, _, err := queryParseData(db, "nonexistent", cursor{})
+	result, _, err := queryParseData(context.Background(), db, "nonexistent", cursor{})
 	if err != nil {
 		t.Fatalf("queryParseData: %v", err)
 	}
@@ -305,7 +309,7 @@ func TestQueryParseDataTerminal(t *testing.T) {
 		`{"id":"model"}`, 8000, 500,
 		"2026-01-15T10:00:00Z", "2026-01-15T11:00:00Z", "2026-01-15T11:00:00Z")
 
-	result, _, err := queryParseData(db, "sess-archived", cursor{})
+	result, _, err := queryParseData(context.Background(), db, "sess-archived", cursor{})
 	if err != nil {
 		t.Fatalf("queryParseData: %v", err)
 	}
@@ -323,7 +327,7 @@ func TestQueryParseDataNoMessages(t *testing.T) {
 		`{"id":"model"}`, 0, 0,
 		"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z", "")
 
-	result, _, err := queryParseData(db, "sess-empty", cursor{})
+	result, _, err := queryParseData(context.Background(), db, "sess-empty", cursor{})
 	if err != nil {
 		t.Fatalf("queryParseData: %v", err)
 	}

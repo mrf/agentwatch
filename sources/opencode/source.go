@@ -11,6 +11,10 @@ package opencode
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
+	"os"
+	"sync"
 	"time"
 
 	"github.com/mrf/agentwatch/session"
@@ -21,6 +25,11 @@ import (
 type Source struct {
 	dbPath string
 	window time.Duration
+
+	// mu guards db and dbInfo and serializes queries on the single handle.
+	mu     sync.Mutex
+	db     *sql.DB
+	dbInfo os.FileInfo
 }
 
 // Option configures a Source.
@@ -62,28 +71,69 @@ func Register(r *source.Registry, opts ...Option) error {
 // Name implements source.Source.
 func (s *Source) Name() string { return "opencode" }
 
-// Discover implements source.Source. It queries the OpenCode SQLite database
-// for sessions, optionally filtering by the discover window.
-func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
+// Close releases the database handle. The Source remains usable: the next
+// Discover or Parse reopens it.
+func (s *Source) Close() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.closeLocked()
+}
+
+func (s *Source) closeLocked() error {
+	db := s.db
+	s.db, s.dbInfo = nil, nil
+	if db == nil {
+		return nil
+	}
+	return db.Close()
+}
+
+// acquireLocked returns the long-lived read-only handle, opening it on first
+// use and reopening it if the file was replaced. It returns (nil, nil) while
+// the database file does not exist. Callers hold s.mu.
+func (s *Source) acquireLocked() (*sql.DB, error) {
 	if s.dbPath == "" {
 		return nil, nil
 	}
+	info, err := os.Stat(s.dbPath)
+	if err != nil {
+		_ = s.closeLocked()
+		if os.IsNotExist(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("opencode: stat %s: %w", s.dbPath, err)
+	}
+	if s.db != nil && os.SameFile(s.dbInfo, info) {
+		return s.db, nil
+	}
+	_ = s.closeLocked()
 	db, err := openReadOnly(s.dbPath)
 	if err != nil {
 		return nil, err
 	}
-	if db == nil {
-		return nil, nil
+	s.db, s.dbInfo = db, info
+	return db, nil
+}
+
+// Discover implements source.Source. It queries the OpenCode SQLite database
+// for sessions, optionally filtering by the discover window.
+func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	db, err := s.acquireLocked()
+	if err != nil || db == nil {
+		return nil, err
 	}
-	defer func() { _ = db.Close() }()
 
 	var cutoff time.Time
 	if s.window > 0 {
 		cutoff = time.Now().Add(-s.window)
 	}
 
-	rows, err := discoverSessions(db, cutoff)
+	rows, err := discoverSessions(ctx, db, cutoff)
 	if err != nil {
+		_ = s.closeLocked()
 		return nil, err
 	}
 
@@ -100,26 +150,31 @@ func (s *Source) Discover(ctx context.Context) ([]source.SessionHandle, error) {
 	return handles, nil
 }
 
-// Parse implements source.Source. The cursor encodes message and tool call
-// counts from the previous parse; deltas are computed by subtraction.
+// Parse implements source.Source. The cursor records what was last reported
+// (counts, tokens, last activity, archive state); an unchanged session yields
+// a zero update so the monitor can let it go stale, and an archived session
+// is reported terminal once.
 func (s *Source) Parse(ctx context.Context, h source.SessionHandle, c source.Cursor) (source.SourceUpdate, source.Cursor, error) {
 	cur, err := decodeCursor(string(c))
 	if err != nil {
 		return source.SourceUpdate{}, c, err
 	}
 
-	db, err := openReadOnly(s.dbPath)
-	if err != nil {
-		return source.SourceUpdate{}, c, err
-	}
-	if db == nil {
-		return source.SourceUpdate{}, c, nil
-	}
-	defer func() { _ = db.Close() }()
+	s.mu.Lock()
+	defer s.mu.Unlock()
 
-	result, newCur, err := queryParseData(db, h.ID, cur)
-	if err != nil {
+	db, err := s.acquireLocked()
+	if err != nil || db == nil {
 		return source.SourceUpdate{}, c, err
+	}
+
+	result, newCur, err := queryParseData(ctx, db, h.ID, cur)
+	if err != nil {
+		_ = s.closeLocked()
+		return source.SourceUpdate{}, c, err
+	}
+	if !result.changed {
+		return source.SourceUpdate{}, c, nil
 	}
 
 	activity := session.ActivityIdle

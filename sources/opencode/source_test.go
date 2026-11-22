@@ -319,13 +319,13 @@ func TestParseActivityIdle(t *testing.T) {
 		t.Fatalf("Parse error: %v", err)
 	}
 
-	// Second parse: no new data -> idle.
+	// Second parse: no new data -> zero update (so the monitor can age it).
 	u2, _, err := src.Parse(context.Background(), h, c1)
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	if u2.Activity != session.ActivityIdle {
-		t.Errorf("Activity = %q, want %q (no new data)", u2.Activity, session.ActivityIdle)
+	if u2.SessionID != "" {
+		t.Errorf("expected zero update when nothing changed, got %+v", u2)
 	}
 }
 
@@ -380,10 +380,8 @@ func TestParseMissingSession(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Parse error: %v", err)
 	}
-	// Session not in DB: zero update with h.ID, no deltas.
-	assertEqual(t, "SessionID", u.SessionID, "nonexistent")
-	assertInt(t, "MessageCountDelta", u.MessageCountDelta, 0)
-	assertInt(t, "ToolCallCountDelta", u.ToolCallCountDelta, 0)
+	// Session not in DB: zero update.
+	assertEqual(t, "SessionID", u.SessionID, "")
 }
 
 func TestParseMissingDB(t *testing.T) {
