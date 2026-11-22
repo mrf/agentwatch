@@ -175,98 +175,130 @@ func parseRecords(lines [][]byte, knownParents map[string]string, includeSidecha
 		if rec.IsSidechain && !includeSidechain {
 			continue
 		}
-
-		// Capture the earliest timestamp as startedAt, latest as lastActivityAt.
-		if rec.Timestamp != "" {
-			t, err := time.Parse(time.RFC3339Nano, rec.Timestamp)
-			if err == nil {
-				if r.startedAt.IsZero() {
-					r.startedAt = t
-				}
-				r.lastActivityAt = t
-			}
-		}
-
-		// Prefer the most recent non-empty values for session metadata.
-		if rec.SessionID != "" {
-			r.sessionID = rec.SessionID
-		}
-		if rec.CWD != "" {
-			r.cwd = rec.CWD
-		}
-		if rec.GitBranch != "" {
-			r.branch = rec.GitBranch
-		}
-		// Only capture slug from non-progress entries (progress entries carry
-		// subagent slugs, not the parent session's slug).
-		if rec.Slug != "" && rec.Type != "progress" && r.slug == "" {
-			r.slug = rec.Slug
-		}
-
-		switch rec.Type {
-		case typeUser:
-			if rec.IsCompactSummary {
-				continue
-			}
-			if rec.Message != nil && rec.Message.Role == typeUser {
-				r.msgDelta++
-				r.activity = session.ActivityWorking
-				r.hasData = true
-				checkSubagentCompletion(rec.Message.Content, &r, r.lastActivityAt)
-			}
-
-		case typeAssistant:
-			// Only count assistant records that carry the Claude Code wrapper
-			// fields (cwd present). Records without cwd are raw API streaming
-			// events that precede the final enriched record for the same turn.
-			if rec.Message == nil || rec.Message.Role != typeAssistant || rec.CWD == "" {
-				continue
-			}
-
-			r.msgDelta++
-			r.hasData = true
-
-			// Locally generated turns (API errors, interrupts) carry the
-			// placeholder model "<synthetic>" and zeroed usage; neither
-			// describes the real conversation.
-			synthetic := rec.Message.Model == syntheticModel
-			if rec.Message.Model != "" && !synthetic {
-				r.model = rec.Message.Model
-			}
-
-			if rec.Message.Usage != nil && !synthetic {
-				u := rec.Message.Usage
-				r.hasTokens = true
-				r.contextTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
-				r.outputTokens = u.OutputTokens
-			}
-
-			// Count tool_use content blocks and record the last tool name.
-			for j := 0; j < len(rec.Message.Content); j++ {
-				if rec.Message.Content[j].Type == typeToolUse {
-					r.toolDelta++
-					r.currentTool = rec.Message.Content[j].Name
-				}
-			}
-
-			switch rec.Message.StopReason {
-			case "end_turn":
-				r.activity = session.ActivityWaiting
-			case typeToolUse:
-				r.activity = session.ActivityWorking
-			}
-
-		case "progress":
-			parseProgressRecord(&rec, &r)
-
-		case "system":
-			if rec.Subtype == "compact_boundary" {
-				r.compactionDelta++
-			}
-		}
+		r.applyRecord(&rec)
 	}
 
 	return r
+}
+
+// applyRecord folds one decoded, in-scope record into r.
+func (r *parseResult) applyRecord(rec *jsonlRecord) {
+	// Capture the earliest timestamp as startedAt, latest as lastActivityAt.
+	if t, ok := parseTimestamp(rec.Timestamp); ok {
+		extendSpan(&r.startedAt, &r.lastActivityAt, t)
+	}
+	r.applyMetadata(rec)
+
+	switch rec.Type {
+	case typeUser:
+		r.applyUser(rec)
+	case typeAssistant:
+		r.applyAssistant(rec)
+	case "progress":
+		parseProgressRecord(rec, r)
+	case "system":
+		if rec.Subtype == "compact_boundary" {
+			r.compactionDelta++
+		}
+	}
+}
+
+// parseTimestamp parses an RFC 3339 record timestamp; empty or malformed
+// values report false.
+func parseTimestamp(ts string) (time.Time, bool) {
+	if ts == "" {
+		return time.Time{}, false
+	}
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return time.Time{}, false
+	}
+	return t, true
+}
+
+// extendSpan records t as the latest time, and as the first when none is set.
+func extendSpan(first, last *time.Time, t time.Time) {
+	if first.IsZero() {
+		*first = t
+	}
+	*last = t
+}
+
+// applyMetadata keeps the most recent non-empty session metadata.
+func (r *parseResult) applyMetadata(rec *jsonlRecord) {
+	if rec.SessionID != "" {
+		r.sessionID = rec.SessionID
+	}
+	if rec.CWD != "" {
+		r.cwd = rec.CWD
+	}
+	if rec.GitBranch != "" {
+		r.branch = rec.GitBranch
+	}
+	// Only capture slug from non-progress entries (progress entries carry
+	// subagent slugs, not the parent session's slug).
+	if rec.Slug != "" && rec.Type != "progress" && r.slug == "" {
+		r.slug = rec.Slug
+	}
+}
+
+func (r *parseResult) applyUser(rec *jsonlRecord) {
+	if rec.IsCompactSummary {
+		return
+	}
+	if rec.Message != nil && rec.Message.Role == typeUser {
+		r.msgDelta++
+		r.activity = session.ActivityWorking
+		r.hasData = true
+		checkSubagentCompletion(rec.Message.Content, r, r.lastActivityAt)
+	}
+}
+
+func (r *parseResult) applyAssistant(rec *jsonlRecord) {
+	// Only count assistant records that carry the Claude Code wrapper
+	// fields (cwd present). Records without cwd are raw API streaming
+	// events that precede the final enriched record for the same turn.
+	if rec.Message == nil || rec.Message.Role != typeAssistant || rec.CWD == "" {
+		return
+	}
+
+	r.msgDelta++
+	r.hasData = true
+	r.applyModelUsage(rec.Message)
+
+	// Count tool_use content blocks and record the last tool name.
+	for j := 0; j < len(rec.Message.Content); j++ {
+		if rec.Message.Content[j].Type == typeToolUse {
+			r.toolDelta++
+			r.currentTool = rec.Message.Content[j].Name
+		}
+	}
+
+	switch rec.Message.StopReason {
+	case "end_turn":
+		r.activity = session.ActivityWaiting
+	case typeToolUse:
+		r.activity = session.ActivityWorking
+	}
+}
+
+// applyModelUsage records an assistant message's model and token usage.
+// Locally generated turns (API errors, interrupts) carry the placeholder
+// model "<synthetic>" and zeroed usage; neither describes the real
+// conversation, so both are ignored.
+func (r *parseResult) applyModelUsage(msg *claudeMessage) {
+	if msg.Model == syntheticModel {
+		return
+	}
+	if msg.Model != "" {
+		r.model = msg.Model
+	}
+	if msg.Usage != nil {
+		u := msg.Usage
+		r.hasTokens = true
+		r.contextTokens = u.InputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens
+		r.outputTokens = u.OutputTokens
+	}
 }
 
 // parseProgressRecord handles a type:"progress" JSONL line, accumulating
@@ -276,40 +308,9 @@ func parseProgressRecord(rec *jsonlRecord, r *parseResult) {
 		return
 	}
 
-	// Determine if this is an agent_progress entry (subagent vs. plain tool progress).
-	isAgent := false
-	if rec.Data != nil {
-		var header progressDataHeader
-		if json.Unmarshal(rec.Data, &header) == nil {
-			isAgent = header.Type == "agent_progress"
-		}
-	}
-
-	// Self-progress filter: skip non-agent entries whose slug matches the
-	// session slug. Agent entries are never self-progress.
-	if !isAgent {
-		if rec.Slug != "" && r.slug != "" && rec.Slug == r.slug {
-			return
-		}
-	}
-
-	sub, exists := r.subagents[rec.ToolUseID]
-	if !exists {
-		// For agent entries, always create a subagent even without a slug.
-		// For non-agent entries, require a slug to avoid creating phantoms.
-		if !isAgent && rec.Slug == "" {
-			return
-		}
-		sub = &subagentResult{
-			id:              rec.ToolUseID,
-			parentToolUseID: rec.ParentToolUseID,
-			slug:            rec.Slug,
-			activity:        session.ActivityWorking,
-		}
-		r.subagents[rec.ToolUseID] = sub
-		if rec.ParentToolUseID != "" {
-			r.parentMap[rec.ParentToolUseID] = rec.ToolUseID
-		}
+	sub := r.progressSubagent(rec, isAgentProgress(rec))
+	if sub == nil {
+		return
 	}
 
 	// Update slug if a later progress record provides one.
@@ -317,13 +318,8 @@ func parseProgressRecord(rec *jsonlRecord, r *parseResult) {
 		sub.slug = rec.Slug
 	}
 
-	if rec.Timestamp != "" {
-		if t, err := time.Parse(time.RFC3339Nano, rec.Timestamp); err == nil {
-			if sub.firstTime.IsZero() {
-				sub.firstTime = t
-			}
-			sub.lastTime = t
-		}
+	if t, ok := parseTimestamp(rec.Timestamp); ok {
+		extendSpan(&sub.firstTime, &sub.lastTime, t)
 	}
 
 	if rec.Data == nil {
@@ -333,7 +329,54 @@ func parseProgressRecord(rec *jsonlRecord, r *parseResult) {
 	if err := json.Unmarshal(rec.Data, &pd); err != nil {
 		return
 	}
+	applyProgressMessage(&pd, sub)
+}
 
+// isAgentProgress reports whether rec is an agent_progress entry (subagent)
+// rather than plain tool progress.
+func isAgentProgress(rec *jsonlRecord) bool {
+	if rec.Data == nil {
+		return false
+	}
+	var header progressDataHeader
+	if json.Unmarshal(rec.Data, &header) != nil {
+		return false
+	}
+	return header.Type == "agent_progress"
+}
+
+// progressSubagent returns the subagent a progress record describes,
+// creating it on first sight, or nil when the record must be ignored.
+func (r *parseResult) progressSubagent(rec *jsonlRecord, isAgent bool) *subagentResult {
+	// Self-progress filter: skip non-agent entries whose slug matches the
+	// session slug. Agent entries are never self-progress.
+	if !isAgent && rec.Slug != "" && r.slug != "" && rec.Slug == r.slug {
+		return nil
+	}
+
+	if sub, exists := r.subagents[rec.ToolUseID]; exists {
+		return sub
+	}
+	// For agent entries, always create a subagent even without a slug.
+	// For non-agent entries, require a slug to avoid creating phantoms.
+	if !isAgent && rec.Slug == "" {
+		return nil
+	}
+	sub := &subagentResult{
+		id:              rec.ToolUseID,
+		parentToolUseID: rec.ParentToolUseID,
+		slug:            rec.Slug,
+		activity:        session.ActivityWorking,
+	}
+	r.subagents[rec.ToolUseID] = sub
+	if rec.ParentToolUseID != "" {
+		r.parentMap[rec.ParentToolUseID] = rec.ToolUseID
+	}
+	return sub
+}
+
+// applyProgressMessage counts the inner message of a progress entry into sub.
+func applyProgressMessage(pd *progressData, sub *subagentResult) {
 	switch pd.Message.Type {
 	case typeAssistant:
 		sub.msgCount++
@@ -384,19 +427,7 @@ func parseSubagentAssistantMessage(raw json.RawMessage, sub *subagentResult) {
 // parentToolUseID (or a cross-batch entry from r.parentMap), marking
 // that subagent as completed. at is the timestamp of the user message.
 func checkSubagentCompletion(blocks []contentBlock, r *parseResult, at time.Time) {
-	// Build lookup: parentToolUseID -> subagent toolUseID
-	parentToSub := make(map[string]string, len(r.subagents)+len(r.parentMap))
-	for id, sub := range r.subagents {
-		if sub.parentToolUseID != "" {
-			parentToSub[sub.parentToolUseID] = id
-		}
-	}
-	// Merge known parents from prior batches (current batch takes precedence).
-	for parentID, subID := range r.parentMap {
-		if _, exists := parentToSub[parentID]; !exists {
-			parentToSub[parentID] = subID
-		}
-	}
+	parentToSub := r.parentToSubagent()
 	if len(parentToSub) == 0 {
 		return
 	}
@@ -425,6 +456,24 @@ func checkSubagentCompletion(blocks []contentBlock, r *parseResult, at time.Time
 			}
 		}
 	}
+}
+
+// parentToSubagent maps parentToolUseID to subagent toolUseID across this
+// batch's subagents and the known parents from prior batches (current batch
+// takes precedence).
+func (r *parseResult) parentToSubagent() map[string]string {
+	parentToSub := make(map[string]string, len(r.subagents)+len(r.parentMap))
+	for id, sub := range r.subagents {
+		if sub.parentToolUseID != "" {
+			parentToSub[sub.parentToolUseID] = id
+		}
+	}
+	for parentID, subID := range r.parentMap {
+		if _, exists := parentToSub[parentID]; !exists {
+			parentToSub[parentID] = subID
+		}
+	}
+	return parentToSub
 }
 
 // buildSubagentStates converts internal subagent results to the public

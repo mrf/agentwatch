@@ -18,6 +18,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -261,59 +262,79 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 
 	var result parseResult
 	if len(lines) > 0 {
-		result = parseLinesWithParents(lines, cc.knownParents())
-		cc.Parents = mergeParents(cc.Parents, buildParentMap(result.subagents))
-		batch := buildSubagentStates(result.subagents)
-		for i := 0; i < len(batch); i++ {
-			id := batch[i].ID
-			entry := cc.Subagents[id]
-			entry.State = accumulateSubagent(entry.State, batch[i])
-			cc.putSubagent(id, entry)
-			touched[id] = struct{}{}
-		}
-		cc.pruneParents()
+		result = parseParentLines(lines, &cc, touched)
 	}
 	if reset || nextPos != cc.Position {
 		dirty = true
 	}
 	cc.Position = nextPos
 
-	var update source.SourceUpdate
-	if result.hasData {
-		sessionID := result.sessionID
-		if sessionID == "" {
-			sessionID = h.ID
-		}
-		update = source.SourceUpdate{
-			SessionID:            sessionID,
-			Slug:                 result.slug,
-			Activity:             result.activity,
-			Model:                result.model,
-			HasTokens:            result.hasTokens,
-			ContextTokens:        result.contextTokens,
-			OutputTokens:         result.outputTokens,
-			MaxContextTokens:     s.contextWindow(result.model),
-			MessageCountDelta:    result.msgDelta,
-			ToolCallCountDelta:   result.toolDelta,
-			CompactionCountDelta: result.compactionDelta,
-			CurrentTool:          result.currentTool,
-			WorkingDir:           result.cwd,
-			Branch:               result.branch,
-			LastActivityAt:       result.lastActivityAt,
-		}
-		if !result.startedAt.IsZero() {
-			update.StartedAt = result.startedAt
-		}
-	}
+	update := s.buildUpdate(h, &result)
+	applySubagentsAndReset(h, &update, &cc, touched, reset)
+	s.applyPendingTerminal(h, &update)
 
-	if !result.hasData && result.compactionDelta > 0 {
-		update = source.SourceUpdate{
-			SessionID:            cmp.Or(result.sessionID, h.ID),
-			CompactionCountDelta: result.compactionDelta,
-			LastActivityAt:       result.lastActivityAt,
-		}
-	}
+	update.SkippedLines = res.Skipped + subSkipped
 
+	if !dirty {
+		return update, c, nil
+	}
+	nextCursor, _ := encodeCursor(cc)
+	return update, nextCursor, nil
+}
+
+// parseParentLines parses the parent transcript's new lines, folds the
+// subagents they report into cc, and adds those IDs to touched.
+func parseParentLines(lines [][]byte, cc *claudeCursor, touched map[string]struct{}) parseResult {
+	result := parseLinesWithParents(lines, cc.knownParents())
+	cc.Parents = mergeParents(cc.Parents, buildParentMap(result.subagents))
+	batch := buildSubagentStates(result.subagents)
+	for i := 0; i < len(batch); i++ {
+		id := batch[i].ID
+		entry := cc.Subagents[id]
+		entry.State = accumulateSubagent(entry.State, batch[i])
+		cc.putSubagent(id, entry)
+		touched[id] = struct{}{}
+	}
+	cc.pruneParents()
+	return result
+}
+
+// buildUpdate converts the parent's parse result into the session update. It
+// is zero when the batch held neither data nor a compaction.
+func (s *ClaudeSource) buildUpdate(h source.SessionHandle, result *parseResult) source.SourceUpdate {
+	if !result.hasData {
+		if result.compactionDelta > 0 {
+			return source.SourceUpdate{
+				SessionID:            cmp.Or(result.sessionID, h.ID),
+				CompactionCountDelta: result.compactionDelta,
+				LastActivityAt:       result.lastActivityAt,
+			}
+		}
+		return source.SourceUpdate{}
+	}
+	return source.SourceUpdate{
+		SessionID:            cmp.Or(result.sessionID, h.ID),
+		Slug:                 result.slug,
+		Activity:             result.activity,
+		Model:                result.model,
+		HasTokens:            result.hasTokens,
+		ContextTokens:        result.contextTokens,
+		OutputTokens:         result.outputTokens,
+		MaxContextTokens:     s.contextWindow(result.model),
+		MessageCountDelta:    result.msgDelta,
+		ToolCallCountDelta:   result.toolDelta,
+		CompactionCountDelta: result.compactionDelta,
+		CurrentTool:          result.currentTool,
+		WorkingDir:           result.cwd,
+		Branch:               result.branch,
+		StartedAt:            result.startedAt,
+		LastActivityAt:       result.lastActivityAt,
+	}
+}
+
+// applySubagentsAndReset attaches the touched subagents' cumulative states to
+// update and flags a Reset, giving the update h's ID when either applies.
+func applySubagentsAndReset(h source.SessionHandle, update *source.SourceUpdate, cc *claudeCursor, touched map[string]struct{}, reset bool) {
 	if len(touched) > 0 {
 		if update.SessionID == "" {
 			update.SessionID = h.ID
@@ -325,25 +346,22 @@ func (s *ClaudeSource) Parse(ctx context.Context, h source.SessionHandle, c sour
 		update.SessionID = cmp.Or(update.SessionID, h.ID)
 		update.Reset = true
 	}
+}
 
-	// Keyed by the handle, never by the records' sessionId: subagent
-	// transcripts carry their parent's sessionId.
-	if cm, ok := s.consumePendingTerminal(h.ID); ok {
-		if update.SessionID == "" {
-			update.SessionID = h.ID
-		}
-		update.Terminal = true
-		update.EndReason = cm.reason
-		update.EndedAt = cm.endedAt
+// applyPendingTerminal marks update terminal when an end marker for h was
+// drained. Keyed by the handle, never by the records' sessionId: subagent
+// transcripts carry their parent's sessionId.
+func (s *ClaudeSource) applyPendingTerminal(h source.SessionHandle, update *source.SourceUpdate) {
+	cm, ok := s.consumePendingTerminal(h.ID)
+	if !ok {
+		return
 	}
-
-	update.SkippedLines = res.Skipped + subSkipped
-
-	if !dirty {
-		return update, c, nil
+	if update.SessionID == "" {
+		update.SessionID = h.ID
 	}
-	nextCursor, _ := encodeCursor(cc)
-	return update, nextCursor, nil
+	update.Terminal = true
+	update.EndReason = cm.reason
+	update.EndedAt = cm.endedAt
 }
 
 // mergeParents returns prior with next's entries added (next takes
@@ -386,54 +404,54 @@ func (s *ClaudeSource) drainEndMarkers(now time.Time) {
 	}
 
 	for _, name := range names {
-		path := filepath.Join(s.sessionEndDir, name)
+		s.drainEndMarker(filepath.Join(s.sessionEndDir, name), maxSize, now)
+	}
+}
 
-		data, ok := readBoundedRegularFile(path, maxSize)
-		if !ok {
-			// Unreadable, not a regular file, or oversize. The name matched
-			// the hook's pattern; remove it only if it is still a plain
-			// regular file (never touch a FIFO, symlink, or directory).
-			removeIfRegular(path)
-			continue
-		}
+// drainEndMarker reads, validates and removes the marker file at path,
+// recording a valid marker in pendingTerminals. Must be called with s.mu held.
+func (s *ClaudeSource) drainEndMarker(path string, maxSize int64, now time.Time) {
+	data, ok := readBoundedRegularFile(path, maxSize)
+	if !ok {
+		// Unreadable, not a regular file, or oversize. The name matched
+		// the hook's pattern; remove it only if it is still a plain
+		// regular file (never touch a FIFO, symlink, or directory).
+		removeIfRegular(path)
+		return
+	}
+	defer func() { _ = os.Remove(path) }()
 
-		var marker sessionEndMarker
-		if err := json.Unmarshal(data, &marker); err != nil {
-			_ = os.Remove(path)
-			continue
-		}
+	var marker sessionEndMarker
+	if err := json.Unmarshal(data, &marker); err != nil {
+		return
+	}
+	if err := validateEndMarker(&marker, now); err != nil {
+		return
+	}
 
-		if err := validateEndMarker(&marker, now); err != nil {
-			_ = os.Remove(path)
-			continue
-		}
+	endedAt := now
+	if t, ok := parseTimestamp(marker.Timestamp); ok {
+		endedAt = t
+	}
 
-		endedAt := now
-		if marker.Timestamp != "" {
-			if t, terr := time.Parse(time.RFC3339Nano, marker.Timestamp); terr == nil {
-				endedAt = t
-			}
-		}
+	cm := consumedMarker{
+		reason:    marker.Reason,
+		endedAt:   endedAt,
+		drainedAt: now,
+	}
+	s.pendingTerminals[marker.SessionID] = cm
 
-		cm := consumedMarker{
-			reason:    marker.Reason,
-			endedAt:   endedAt,
-			drainedAt: now,
-		}
-		s.pendingTerminals[marker.SessionID] = cm
-
-		// Also index by the filename-based session ID (transcript path stem)
-		// in case the marker's session_id differs from the JSONL filename.
-		if marker.TranscriptPath != "" {
-			fileID := strings.TrimSuffix(filepath.Base(marker.TranscriptPath), ".jsonl")
-			if fileID != marker.SessionID {
-				if _, exists := s.pendingTerminals[fileID]; !exists {
-					s.pendingTerminals[fileID] = cm
-				}
-			}
-		}
-
-		_ = os.Remove(path)
+	// Also index by the filename-based session ID (transcript path stem)
+	// in case the marker's session_id differs from the JSONL filename.
+	if marker.TranscriptPath == "" {
+		return
+	}
+	fileID := strings.TrimSuffix(filepath.Base(marker.TranscriptPath), ".jsonl")
+	if fileID == marker.SessionID {
+		return
+	}
+	if _, exists := s.pendingTerminals[fileID]; !exists {
+		s.pendingTerminals[fileID] = cm
 	}
 }
 
@@ -526,16 +544,8 @@ func validateEndMarker(marker *sessionEndMarker, now time.Time) error {
 		return fmt.Errorf("%w: session_id contains invalid characters", errInvalidEndMarker)
 	}
 
-	if marker.TranscriptPath != "" {
-		if len(marker.TranscriptPath) > maxTranscriptPathLen {
-			return fmt.Errorf("%w: transcript_path too long (%d > %d)", errInvalidEndMarker, len(marker.TranscriptPath), maxTranscriptPathLen)
-		}
-		if !strings.HasSuffix(marker.TranscriptPath, ".jsonl") {
-			return fmt.Errorf("%w: transcript_path does not end with .jsonl", errInvalidEndMarker)
-		}
-		if strings.Contains(marker.TranscriptPath, "..") {
-			return fmt.Errorf("%w: transcript_path contains path traversal", errInvalidEndMarker)
-		}
+	if err := validateTranscriptPath(marker.TranscriptPath); err != nil {
+		return err
 	}
 
 	// Reason: truncate silently if too long (non-critical field).
@@ -546,13 +556,28 @@ func validateEndMarker(marker *sessionEndMarker, now time.Time) error {
 	// Timestamp: clear if invalid or outside skew window.
 	if marker.Timestamp != "" {
 		parsed, err := time.Parse(time.RFC3339Nano, marker.Timestamp)
-		if err != nil {
-			marker.Timestamp = ""
-		} else if absDuration(now.Sub(parsed)) > endMarkerTimestampSkew {
+		if err != nil || absDuration(now.Sub(parsed)) > endMarkerTimestampSkew {
 			marker.Timestamp = ""
 		}
 	}
 
+	return nil
+}
+
+// validateTranscriptPath checks a marker's optional transcript_path.
+func validateTranscriptPath(p string) error {
+	if p == "" {
+		return nil
+	}
+	if len(p) > maxTranscriptPathLen {
+		return fmt.Errorf("%w: transcript_path too long (%d > %d)", errInvalidEndMarker, len(p), maxTranscriptPathLen)
+	}
+	if !strings.HasSuffix(p, ".jsonl") {
+		return fmt.Errorf("%w: transcript_path does not end with .jsonl", errInvalidEndMarker)
+	}
+	if strings.Contains(p, "..") {
+		return fmt.Errorf("%w: transcript_path contains path traversal", errInvalidEndMarker)
+	}
 	return nil
 }
 
@@ -674,87 +699,80 @@ func decodeTryPaths(root, sep string, parts []string) string {
 		return ""
 	}
 
-	type pathState struct{ components []string }
-
-	withSlash := func(s pathState, part string) pathState {
-		next := make([]string, len(s.components)+1)
-		copy(next, s.components)
-		next[len(s.components)] = part
-		return pathState{components: next}
-	}
-	withHyphen := func(s pathState, part string) pathState {
-		next := make([]string, len(s.components))
-		copy(next, s.components)
-		next[len(next)-1] = next[len(next)-1] + "-" + part
-		return pathState{components: next}
-	}
-	statePath := func(s pathState) string {
-		return root + strings.Join(s.components, sep)
-	}
-
-	parentExistsCache := make(map[string]bool)
-	pathExistsCache := make(map[string]bool)
-
-	parentExists := func(s pathState) bool {
-		if len(s.components) <= 1 {
-			return true
-		}
-		parent := root + strings.Join(s.components[:len(s.components)-1], sep)
-		if exists, ok := parentExistsCache[parent]; ok {
-			return exists
-		}
-		_, err := os.Stat(parent)
-		exists := err == nil
-		parentExistsCache[parent] = exists
-		return exists
-	}
-
-	candidates := []pathState{{components: []string{parts[0]}}}
+	d := pathDecoder{root: root, sep: sep, parentExists: make(map[string]bool)}
+	candidates := [][]string{{parts[0]}}
 
 	for idx := 1; idx < len(parts); idx++ {
-		nextCandidates := make([]pathState, 0, len(candidates)*2)
-		seen := make(map[string]struct{}, len(candidates)*2)
-
-		for i := 0; i < len(candidates); i++ {
-			for _, candidate := range []pathState{
-				withSlash(candidates[i], parts[idx]),
-				withHyphen(candidates[i], parts[idx]),
-			} {
-				if !parentExists(candidate) {
-					continue
-				}
-				p := statePath(candidate)
-				if _, ok := seen[p]; !ok {
-					nextCandidates = append(nextCandidates, candidate)
-					seen[p] = struct{}{}
-				}
-			}
-			if len(nextCandidates) > maxDecodePathCandidates {
-				return ""
-			}
-		}
-
-		if len(nextCandidates) == 0 {
+		next, ok := d.expand(candidates, parts[idx])
+		if !ok || len(next) == 0 {
 			return ""
 		}
-		candidates = nextCandidates
+		candidates = next
 	}
 
 	for i := 0; i < len(candidates); i++ {
-		p := statePath(candidates[i])
-		if exists, ok := pathExistsCache[p]; ok {
-			if exists {
-				return p
-			}
-			continue
-		}
-		_, err := os.Stat(p)
-		exists := err == nil
-		pathExistsCache[p] = exists
-		if exists {
+		p := d.path(candidates[i])
+		if _, err := os.Stat(p); err == nil {
 			return p
 		}
 	}
 
 	return ""
+}
+
+// pathDecoder holds decodeTryPaths' inputs and its parent-existence cache.
+// A candidate is a list of path components joined under root with sep.
+type pathDecoder struct {
+	root, sep    string
+	parentExists map[string]bool
+}
+
+func (d *pathDecoder) path(components []string) string {
+	return d.root + strings.Join(components, d.sep)
+}
+
+// hasParent reports whether the directory holding the candidate's last
+// component exists.
+func (d *pathDecoder) hasParent(components []string) bool {
+	if len(components) <= 1 {
+		return true
+	}
+	parent := d.path(components[:len(components)-1])
+	if exists, ok := d.parentExists[parent]; ok {
+		return exists
+	}
+	_, err := os.Stat(parent)
+	exists := err == nil
+	d.parentExists[parent] = exists
+	return exists
+}
+
+// expand extends every candidate with part, once as a new component and once
+// hyphen-joined to the last, keeping distinct candidates whose parent exists.
+// It reports false once more than maxDecodePathCandidates survive.
+func (d *pathDecoder) expand(candidates [][]string, part string) ([][]string, bool) {
+	next := make([][]string, 0, len(candidates)*2)
+	seen := make(map[string]struct{}, len(candidates)*2)
+
+	for i := 0; i < len(candidates); i++ {
+		cur := candidates[i]
+		withSlash := append(slices.Clip(cur), part)
+		withHyphen := slices.Clone(cur)
+		withHyphen[len(withHyphen)-1] += "-" + part
+
+		for _, candidate := range [][]string{withSlash, withHyphen} {
+			if !d.hasParent(candidate) {
+				continue
+			}
+			p := d.path(candidate)
+			if _, ok := seen[p]; !ok {
+				next = append(next, candidate)
+				seen[p] = struct{}{}
+			}
+		}
+		if len(next) > maxDecodePathCandidates {
+			return nil, false
+		}
+	}
+	return next, true
 }

@@ -78,36 +78,47 @@ func readSubagentFiles(parentPath string, cc *claudeCursor) (touched map[string]
 		if !ok {
 			continue
 		}
-		entry := cc.Subagents[id]
-		res, next, reset, err := jsonl.ReadFrom(filepath.Join(dir, de.Name()), entry.Position, jsonl.Options{})
-		if err != nil {
+		entry, changed, moved, n, ok := readSubagentFile(dir, de.Name(), id, cc.Subagents[id])
+		if !ok {
 			continue
 		}
-		if reset {
-			// The file is re-read from the start. Only the counts
-			// accumulate; every other field is overwritten by the re-read.
-			entry.State.MessageCount, entry.State.ToolCallCount = 0, 0
+		if changed {
 			touched[id] = struct{}{}
 		}
-		if next != entry.Position {
-			advanced = true
-		}
-		entry.Position = next
-		skipped += res.Skipped
-		lines := res.Lines
-		entry.State.ID = id
-		if entry.State.ParentID == "" {
-			entry.State.ParentID = readSubagentParentToolUseID(filepath.Join(dir, "agent-"+id+".meta.json"))
-		}
-
-		r := parseSubagentLines(lines)
-		if r.hasData || !r.lastActivityAt.IsZero() {
-			entry.State = accumulateSubagent(entry.State, fileSubagentBatch(id, r))
-			touched[id] = struct{}{}
-		}
+		advanced = advanced || moved
+		skipped += n
 		cc.putSubagent(id, entry)
 	}
 	return touched, advanced, skipped
+}
+
+// readSubagentFile reads new lines of subagent id's file name in dir and folds
+// them into entry. It reports whether the state changed, whether the offset
+// advanced, the skipped-line count, and false if the file could not be read.
+func readSubagentFile(dir, name, id string, entry subagentEntry) (out subagentEntry, changed, advanced bool, skipped int, ok bool) {
+	res, next, reset, err := jsonl.ReadFrom(filepath.Join(dir, name), entry.Position, jsonl.Options{})
+	if err != nil {
+		return entry, false, false, 0, false
+	}
+	if reset {
+		// The file is re-read from the start. Only the counts
+		// accumulate; every other field is overwritten by the re-read.
+		entry.State.MessageCount, entry.State.ToolCallCount = 0, 0
+		changed = true
+	}
+	advanced = next != entry.Position
+	entry.Position = next
+	entry.State.ID = id
+	if entry.State.ParentID == "" {
+		entry.State.ParentID = readSubagentParentToolUseID(filepath.Join(dir, "agent-"+id+".meta.json"))
+	}
+
+	r := parseSubagentLines(res.Lines)
+	if r.hasData || !r.lastActivityAt.IsZero() {
+		entry.State = accumulateSubagent(entry.State, fileSubagentBatch(id, r))
+		changed = true
+	}
+	return entry, changed, advanced, res.Skipped, true
 }
 
 func (cc *claudeCursor) putSubagent(id string, e subagentEntry) {
@@ -176,6 +187,16 @@ func accumulateSubagent(prev, b session.SubagentState) session.SubagentState {
 	}
 	s.MessageCount += b.MessageCount
 	s.ToolCallCount += b.ToolCallCount
+	accumulateSubagentTimes(&s, b)
+	if b.Activity != "" && s.Activity != session.ActivityTerminal {
+		s.Activity = b.Activity
+	}
+	return s
+}
+
+// accumulateSubagentTimes keeps the earliest StartedAt and latest
+// LastActivityAt, and takes a non-zero CompletedAt from b.
+func accumulateSubagentTimes(s *session.SubagentState, b session.SubagentState) {
 	if !b.StartedAt.IsZero() && (s.StartedAt.IsZero() || b.StartedAt.Before(s.StartedAt)) {
 		s.StartedAt = b.StartedAt
 	}
@@ -185,10 +206,6 @@ func accumulateSubagent(prev, b session.SubagentState) session.SubagentState {
 	if !b.CompletedAt.IsZero() {
 		s.CompletedAt = b.CompletedAt
 	}
-	if b.Activity != "" && s.Activity != session.ActivityTerminal {
-		s.Activity = b.Activity
-	}
-	return s
 }
 
 // knownParents returns parentToolUseID -> subagent ID for every subagent the
