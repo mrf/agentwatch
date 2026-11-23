@@ -99,7 +99,7 @@ if err := mon.Run(ctx); err != nil && !errors.Is(err, context.Canceled) {
 
 | Method | Description |
 |--------|-------------|
-| `PollOnce(ctx)` | Run one discover+parse cycle across all sources |
+| `PollOnce(ctx)` | Run one discover+parse cycle across all sources (never closes sources; `PollOnce`-only callers close any `io.Closer` source themselves) |
 | `Run(ctx)` | Poll on the configured interval until ctx is canceled, then close any source implementing `io.Closer` |
 | `Snapshot()` | Return a copy of all currently tracked sessions |
 | `Get(id)` | Return a single session by ID |

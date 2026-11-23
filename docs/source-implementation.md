@@ -166,7 +166,9 @@ A zero `Update` never creates a session or refreshes `LastDataReceivedAt`; only 
 
 `Close` is not part of `source.Source`. A source that owns a resource (a database handle, say) may additionally implement `io.Closer`. When `Monitor.Run` returns, it calls `Close` once on each such source, in registration order. A `Close` error is logged and does not affect `Run`'s result or source health.
 
-`PollOnce` never closes sources. Consumers that call only `PollOnce` (or use a source directly) must close any `io.Closer` source themselves. `Close` may be called while a `PollOnce` is still in flight, so make it safe to call concurrently with `Discover` and `Parse`. The `opencode` source works this way: `Close` is safe to call at any time, and the next `Discover` or `Parse` reopens the handle.
+`PollOnce` never closes sources. Consumers that call only `PollOnce` (or use a source directly) must close any `io.Closer` source themselves.
+
+`Run` closes sources only after any external `PollOnce` still in flight has finished (bounded by that poll's context), so a source's `Close` never overlaps a monitor-driven `Discover` or `Parse`. Keep `Close` safe to call concurrently anyway, since direct callers can race it. The `opencode` source reopens its handle lazily on the next `Discover` or `Parse` after `Close`; a `PollOnce` started after `Run` has returned therefore reopens it, and that caller must close the source again.
 
 ## Using the Source Registry
 
