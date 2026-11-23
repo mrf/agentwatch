@@ -5,6 +5,7 @@ package monitor
 import (
 	"cmp"
 	"context"
+	"io"
 	"slices"
 	"sync"
 	"sync/atomic"
@@ -460,7 +461,14 @@ func (m *Monitor) deliver(ctx context.Context, b *pollBatch) {
 // Run starts the monitor loop. It polls sources at the configured interval
 // and reaps terminal sessions whose retention window has expired.
 // Run blocks until ctx is canceled and returns ctx.Err().
+//
+// When Run returns, it closes every configured source that implements
+// io.Closer, once each in registration order. A Close error is logged and
+// never changes Run's result or source health. Callers that only use
+// PollOnce never reach this step and must close such sources themselves.
 func (m *Monitor) Run(ctx context.Context) error {
+	defer m.closeSources()
+
 	ticker := m.cfg.clock.NewTicker(m.cfg.pollInterval)
 	defer ticker.Stop()
 
@@ -472,6 +480,23 @@ func (m *Monitor) Run(ctx context.Context) error {
 			if err := m.PollOnce(ctx); err != nil {
 				return err
 			}
+		}
+	}
+}
+
+// closeSources closes each source that implements io.Closer, continuing past
+// failures so one bad Close cannot leak the rest.
+func (m *Monitor) closeSources() {
+	for i := 0; i < len(m.cfg.sources); i++ {
+		c, ok := m.cfg.sources[i].(io.Closer)
+		if !ok {
+			continue
+		}
+		if err := c.Close(); err != nil {
+			m.cfg.logger.Warn("source close failed",
+				"source", m.cfg.sources[i].Name(),
+				"error", err,
+			)
 		}
 	}
 }

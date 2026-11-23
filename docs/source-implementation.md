@@ -162,6 +162,12 @@ The cursor you return is persisted **even when you also return an error** or a z
 
 A zero `Update` never creates a session or refreshes `LastDataReceivedAt`; only a non-zero update counts as data for stale detection.
 
+## Releasing Resources
+
+`Close` is not part of `source.Source`. A source that owns a resource (a database handle, say) may additionally implement `io.Closer`. When `Monitor.Run` returns, it calls `Close` once on each such source, in registration order. A `Close` error is logged and does not affect `Run`'s result or source health.
+
+`PollOnce` never closes sources. Consumers that call only `PollOnce` (or use a source directly) must close any `io.Closer` source themselves. `Close` may be called while a `PollOnce` is still in flight, so make it safe to call concurrently with `Discover` and `Parse`. The `opencode` source works this way: `Close` is safe to call at any time, and the next `Discover` or `Parse` reopens the handle.
+
 ## Using the Source Registry
 
 `source.Registry` maps names to factory functions for dynamic source lookup. It is optional — pass sources directly to `monitor.WithSources` if you do not need it.

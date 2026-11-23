@@ -189,7 +189,7 @@ Rules:
 - Rewrite-on-save sources may encode mtimes, hashes, or source-specific JSON.
 - Source-specific continuity, such as Claude subagent parent maps, belongs inside the source or cursor. It should not leak into `SessionHandle`.
 - `context.Context` is required on blocking methods.
-- `Close()` is not part of the core interface. If a source owns resources, cancellation through `Run(ctx)` should be enough. A later optional `io.Closer` check can be added if a real source needs it.
+- `Close()` is not part of the core interface. A source that owns resources may implement `io.Closer`; `Monitor.Run` closes each such source once when it returns (the `opencode` source's SQLite handle is the real case). `PollOnce`-only callers close sources themselves.
 
 ### 4.2 Registry
 
