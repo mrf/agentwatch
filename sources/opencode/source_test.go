@@ -54,7 +54,7 @@ func TestDiscoverFindsSession(t *testing.T) {
 			"2026-01-15T10:00:00Z", "2026-01-15T10:30:00Z", "")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	handles, err := src.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover error: %v", err)
@@ -86,7 +86,7 @@ func TestDiscoverMultipleSessions(t *testing.T) {
 			"2026-01-15T11:00:00Z", "2026-01-15T11:00:00Z", "")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	handles, err := src.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover error: %v", err)
@@ -107,7 +107,7 @@ func TestDiscoverWindowFiltersOld(t *testing.T) {
 			recentTime, recentTime, "")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath), opencode.WithDiscoverWindow(24*time.Hour))
+	src := newSource(t, dbPath, opencode.WithDiscoverWindow(24*time.Hour))
 	handles, err := src.Discover(context.Background())
 	if err != nil {
 		t.Fatalf("Discover error: %v", err)
@@ -155,7 +155,7 @@ func TestParseCursorAdvances(t *testing.T) {
 			"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	_, c1, err := src.Parse(context.Background(), h, "")
@@ -190,7 +190,7 @@ func TestParseInvalidCursorResets(t *testing.T) {
 			"2026-01-15T10:00:01Z", "2026-01-15T10:00:01Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	for _, bad := range []source.Cursor{"not-valid", "1,2,3", "a,b,c,d,e,f,g", "0,0,0,0,0,9,0"} {
@@ -234,7 +234,7 @@ func TestParseSessionData(t *testing.T) {
 			"2026-01-15T10:01:00Z", "2026-01-15T10:01:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	u, _, err := src.Parse(context.Background(), h, "")
@@ -263,7 +263,7 @@ func TestParseTerminalSession(t *testing.T) {
 			"2026-01-15T10:00:00Z", "2026-01-15T11:00:00Z", "2026-01-15T11:00:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-done", Path: dbPath, Source: "opencode"}
 
 	u, _, err := src.Parse(context.Background(), h, "")
@@ -291,7 +291,7 @@ func TestParseActivityUserMessage(t *testing.T) {
 			"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	u, _, err := src.Parse(context.Background(), h, "")
@@ -317,7 +317,7 @@ func TestParseActivityWorking(t *testing.T) {
 			"2026-01-15T10:01:00Z", "2026-01-15T10:01:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	u, _, err := src.Parse(context.Background(), h, "")
@@ -338,7 +338,7 @@ func TestParseActivityIdle(t *testing.T) {
 			"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	// First parse sees the message.
@@ -366,7 +366,7 @@ func TestParseDelta(t *testing.T) {
 			"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z")
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "sess-1", Path: dbPath, Source: "opencode"}
 
 	// First parse: 1 message.
@@ -401,7 +401,7 @@ func TestParseMissingSession(t *testing.T) {
 		// Empty DB with schema but no sessions.
 	})
 
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := newSource(t, dbPath)
 	h := source.SessionHandle{ID: "nonexistent", Path: dbPath, Source: "opencode"}
 
 	u, _, err := src.Parse(context.Background(), h, "")
@@ -441,7 +441,7 @@ func TestParseModelFormats(t *testing.T) {
 				insertSession(t, db, "s", "", "/p", tt.modelJSON, 0, 0,
 					"2026-01-15T10:00:00Z", "2026-01-15T10:00:00Z", "")
 			})
-			src := opencode.New(opencode.WithDBPath(dbPath))
+			src := newSource(t, dbPath)
 			h := source.SessionHandle{ID: "s", Path: dbPath, Source: "opencode"}
 
 			u, _, err := src.Parse(context.Background(), h, "")

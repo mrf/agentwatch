@@ -3,7 +3,9 @@ package sqlitero
 import (
 	"context"
 	"database/sql"
+	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -19,8 +21,12 @@ func TestDSN_EscapesURISyntax(t *testing.T) {
 }
 
 func TestOpen_ReadsUncheckpointedWAL(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "odd?#dir.db")
-	w, err := sql.Open("sqlite", "file:"+strings.ReplaceAll(strings.ReplaceAll(path, "?", "%3F"), "#", "%23"))
+	name := "odd?#%dir.db"
+	if runtime.GOOS == "windows" {
+		name = "odd#%dir.db" // '?' is not a legal Windows filename character
+	}
+	path := filepath.Join(t.TempDir(), name)
+	w, err := sql.Open("sqlite", strings.Replace(DSN(path), "mode=ro", "mode=rwc", 1))
 	if err != nil {
 		t.Fatalf("open writer: %v", err)
 	}
@@ -36,6 +42,9 @@ func TestOpen_ReadsUncheckpointedWAL(t *testing.T) {
 		if _, err := w.Exec(stmts[i]); err != nil {
 			t.Fatalf("%s: %v", stmts[i], err)
 		}
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("writer did not create %q: %v", path, err)
 	}
 
 	db, err := Open(path)

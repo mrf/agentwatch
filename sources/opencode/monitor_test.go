@@ -52,9 +52,9 @@ func newMonitor(t *testing.T, src source.Source, clk *clock.Mock, rec *lifecycle
 	return m
 }
 
-func newSource(t *testing.T, dbPath string) *opencode.Source {
+func newSource(t *testing.T, dbPath string, opts ...opencode.Option) *opencode.Source {
 	t.Helper()
-	src := opencode.New(opencode.WithDBPath(dbPath))
+	src := opencode.New(append([]opencode.Option{opencode.WithDBPath(dbPath)}, opts...)...)
 	t.Cleanup(func() { _ = src.Close() })
 	return src
 }

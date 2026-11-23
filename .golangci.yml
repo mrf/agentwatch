@@ -94,6 +94,7 @@ linters:
       disable:
         - rangeint # CLAUDE.md design rule 8: no range-over-integer.
         - omitzero # omitempty -> omitzero changes the public JSON wire format (zero structs would vanish).
+        - slicesbackward # CLAUDE.md design rule 8: classic index loops, same reason as rangeint.
     gosec:
       excludes:
         - G304 # file paths come from caller-configured session directories; reading them is the library's purpose.
