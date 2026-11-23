@@ -464,7 +464,11 @@ func (m *Monitor) deliver(ctx context.Context, b *pollBatch) {
 //
 // When Run returns, it closes every configured source that implements
 // io.Closer, once each in registration order, after waiting for any external
-// PollOnce still in flight (bounded by that poll's context). A Close error is
+// PollOnce still in flight. Run's own ctx does not cut that wait short: it
+// lasts as long as the poll, so it is bounded only if the poll's context ends
+// and every source's Discover and Parse and the sink's HandleEvent honor it.
+// A poll on a context with no deadline (such as context.Background()) makes
+// Run's return wait on it without limit. A Close error is
 // logged and never changes Run's result or source health. Callers that only
 // use PollOnce never reach this step and must close such sources themselves.
 func (m *Monitor) Run(ctx context.Context) error {
@@ -491,7 +495,9 @@ func (m *Monitor) Run(ctx context.Context) error {
 // It holds pollSem while closing so an external PollOnce still in flight
 // drains first: sources may lazily reopen on the next Discover or Parse, and
 // a Close that raced such a poll would leave the reopened handle leaked. The
-// wait is bounded by that poll's context. Run's own poll has already returned
+// wait is unconditional (no ctx or timeout): it lasts as long as that poll,
+// which is bounded only if the poll's context ends and its sources and sink
+// honor it. Run's own poll has already returned
 // by the time this is deferred, so it cannot deadlock on itself.
 func (m *Monitor) closeSources() {
 	m.pollSem <- struct{}{}
