@@ -61,7 +61,7 @@ Sources (Discover + Parse)
 
 1. State is committed to the store before any event is delivered.
 2. Events are delivered outside all store locks.
-3. `PollOnce` is not safe to call concurrently; `Run` serialises calls internally.
+3. `PollOnce` is safe to call concurrently, including alongside `Run`: calls are serialised internally, and a waiting call returns `ctx.Err()` if its context is canceled first. `Run` also waits for an in-flight `PollOnce` before closing sources.
 4. `Snapshot` and `Get` acquire the store lock briefly for a deep copy and are safe to call from any goroutine.
 
 ## Key Types
