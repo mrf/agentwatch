@@ -73,6 +73,10 @@ func (s *Source) Name() string { return "opencode" }
 
 // Close releases the database handle. The Source remains usable: the next
 // Discover or Parse reopens it.
+//
+// Source implements io.Closer, and monitor.Monitor.Run closes it when Run
+// returns. Callers that drive the source with PollOnce only, or directly via
+// Discover and Parse, must call Close themselves.
 func (s *Source) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
